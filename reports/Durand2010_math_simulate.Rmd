@@ -1,0 +1,268 @@
+---
+title: "Untitled"
+author: "Mark Hagemann"
+date: "February 15, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Make some synthetic data to try and understand A0 calculation. 
+
+If I have a system that varies in time and space governed by Manning's equation. Distributions shouldn't matter. 
+
+Simulate
+
+- Q_t
+- A_0i
+- delta_it
+- x_it
+
+
+```{r}
+nt <- 3
+nx <- 2
+qt <- rnorm(nt, 5, 0.5)
+qit <- matrix(rep(qt, nx), nrow = nt)
+xit <- matrix(rnorm(nt * nx, 3, 0.3), nrow = nt)
+ait <- qit / xit
+# a0 <- rnorm(nx, 2, 0.2)
+a0 <- c(1, 2)
+a0it <- matrix(rep(a0, nt), nrow = nt, byrow = TRUE)
+dait <- ait - a0it
+
+yvec <- (xit * -dait) %*% c(1, -1)
+
+Omega <- matrix(c(1, 0, 0, -1), nr = 2)
+
+desgn <- xit %*% Omega
+
+
+moddf <- data.frame(x1 = desgn[, 1], x2 = desgn[, 2], y = yvec)
+
+modlm <- lm(y ~ 0 + x1 + x2, moddf)
+
+summary(modlm)
+
+pairs(moddf)
+```
+
+OK, that proves it! The method is sound. Now I need to write it up. 
+
+
+Let's write a function to estimate A0 from data!
+
+
+```{r}
+
+estA0 <- function(wmat, smat, damat) {
+  
+  stopifnot(dim(wmat) == dim(smat) && dim(smat) == dim(damat))
+  
+  xmat <- t((wmat ^ (2/3) * smat ^ (1/2)) ^ (3/5)) # this is time-down, space-across.
+  
+  parinds <- t(combn(1:nrow(wmat), 2))
+  
+  
+  nx <- ncol(xmat)
+  nt <- nrow(xmat)
+  nxpos <- ceiling(nx / 2)
+  nxneg <- floor(nx / 2)
+  
+  wts <- rep(c(1/nxpos, -1 / nxneg), length.out = nx)
+  
+  dsgn <- xmat %*% diag(wts)
+  lmout <- 
+  fmla
+}
+
+
+estA0_2loc <- function(wmat, smat, damat, locinds) {
+  
+  stopifnot(dim(wmat) == dim(smat) && dim(smat) == dim(damat))
+  xmat <- t((wmat ^ (2/3) * smat ^ (1/2)) ^ (3/5))[, locinds] # this is time-down, space-across.
+  
+  wts <- c(1, -1)
+  
+  dsgn <- xmat %*% diag(wts)
+  rsps <- (xmat * t(-damat)[, locinds]) %*% wts 
+  
+  lmdf <- na.omit(data.frame(x1 = dsgn[, 1], x2 = dsgn[, 2], y = rsps))
+  
+  lmout <- lm(y ~ 0 + x1 + x2, data = lmdf)
+  # out <- coef(lmout)
+  # out
+}
+  
+
+```
+
+Make some fake data to try it on!
+
+```{r}
+nt <- 40
+nx <- 2
+qt <- rnorm(nt, 5, 0.5)
+qit <- matrix(rep(qt, nx), nrow = nt)
+xit <- matrix(rnorm(nt * nx, 3, 0.3), nrow = nt)
+ait <- (qit / xit)^(3/5)
+wmat <- t(matrix(rnorm(nt * nx, 1.5, 0.15), nrow = nt)) ^ (-3/2)
+smat <- (t(xit) * wmat^(2/3)) ^ (2)
+# a0 <- rnorm(nx, 2, 0.2)
+a0 <- c(1, 2)
+a0it <- matrix(rep(a0, nt), nrow = nt, byrow = TRUE)
+damat <- t(ait - a0it)
+locinds <- c(1, 2)
+
+foo <- estA0_2loc(wmat, smat, damat, c(1, 2))
+summary(foo)
+```
+
+
+Try it on some real data!
+
+```{r}
+
+library(swotData)
+
+testdat <- swotData::Pepsi_v2$Ganges
+
+wmat = testdat$w
+smat = testdat$s 
+damat = testdat$dA
+
+testa0 <- estA0_2loc(wmat = testdat$w, smat = testdat$s, damat = testdat$dA, 
+                     locinds = c(1, 2))
+summary(testa0)
+```
+
+
+
+Here's an idea I had to add an arbitrary number of rows to the model matrix
+
+```{r}
+estA0 <- function(wmat, smat, damat) {
+  
+  stopifnot(dim(wmat) == dim(smat) && dim(smat) == dim(damat))
+  
+  # Assume these inputs come as DAWG-style time-across, space-down matrices. 
+  # Transpose.
+  wmat <- t(wmat)
+  smat <- t(smat)
+  damat <- t(damat)
+  
+  
+  xmat <- (wmat ^ (-2/3) * smat ^ (1/2)) ^ (3/5)
+  
+  nx <- ncol(xmat)
+  
+  omegas <- lapply(1:100, function(x) rnorm(nx))
+  omegas <- lapply(omegas, function(x) x - mean(x))
+  
+  modmats <- lapply(omegas, function(x) xmat %*% diag(x))
+  
+  modmat <- Reduce(rbind, modmats)
+  
+  rsps <- lapply(omegas, function(x) (xmat * -damat) %*% x) 
+  rsp <- unlist(rsps)
+  
+  lmdf <- setNames(as.data.frame(cbind(rsp, modmat)), c("y", paste0("x", 1:nx)))
+  
+  lmout <- lm(y ~ 0 + ., data = lmdf)
+  # out <- coef(lmout)
+  # out
+}
+```
+
+Now test *that* out!
+
+```{r}
+
+goodr <- foonc$River_Info.gdrch
+ashw <- foonc$Reach_Timeseries.W[goodr, ]
+ashs <- foonc$Reach_Timeseries.S[goodr, ]
+asha <- foonc$Reach_Timeseries.A[goodr, ]
+asha0 <- apply(asha, 1, median)
+ashda <- asha - matrix(rep(asha0, ncol(asha)), ncol = ncol(asha))
+
+asha0est <- estA0(wmat = ashw, smat = ashs, damat = ashda)
+
+summary(asha0est)
+
+asha0
+
+
+plot(asha0, asha0est$coefficients)
+abline(0, 1)
+```
+
+
+Real quick, do this for all Pepsi 2.0 cases. 
+
+```{r}
+ncfiles <- list.files("../../swotData/data/NC_files/", full.names = TRUE, pattern = "\\.nc$")
+
+cases <- lapply(ncfiles, nc_list)
+casenames <- list.files("../../swotData/data/NC_files/", pattern = "\\.nc$") %>% 
+  gsub("\\.nc$", "", .)
+
+a0list <- list()
+estlist <- list()
+complist <- list()
+
+for (i in 1:length(cases)) {
+  
+  case <- cases[[i]]
+  
+  print(ncfiles[i])
+  
+  goodr <- case[["River_Info.gdrch"]]
+  amat <- case[["Reach_Timeseries.A"]][goodr, ]
+  a0vec <- apply(amat, 1, median) # median version
+  # a0vec <- apply(amat, 1, min) # minimum version
+  
+  a0mat <- matrix(rep(a0vec, ncol(amat)), ncol = ncol(amat))
+  damat <- amat - a0mat
+  
+  lmi <- try(estA0(wmat = case[["Reach_Timeseries.W"]][goodr, ],
+               smat = case[["Reach_Timeseries.S"]][goodr, ],
+               damat = damat))
+  if (inherits(lmi, "try-error")) next
+  
+  a0list[[i]] <- a0vec
+  estlist[[i]] <- coef(lmi)
+  
+  complist[[i]] <- data.frame(real = a0vec, est = coef(lmi))
+  
+}
+
+names(a0list) <- casenames
+names(estlist) <- casenames
+names(complist) <- casenames
+
+nulls <- sapply(estlist, is.null)
+
+a0compare <- dplyr::bind_rows(complist[!nulls], .id = "case")
+
+glimpse(a0compare)
+```
+
+
+See how this looks!
+
+```{r}
+library(ggplot2)
+
+ggplot(a0compare, aes(x = real, y = est)) + 
+  geom_point(aes(color = as.factor(case))) + 
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_abline(aes(slope = 1, intercept = 0))
+  
+ggsave("../graphs/A0_estimate_log.png")
+```
+
+
+

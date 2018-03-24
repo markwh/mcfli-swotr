@@ -1,0 +1,189 @@
+---
+title: "notebook20180313"
+author: "Mark Hagemann"
+date: "March 13, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Much of today was continuing yesterday's work in yesterday's notebook. 
+
+Following skype call with Mike and Steve: look at Willamette data from A0 inversion perspective
+
+```{r}
+hc_h <- read.csv("../data/HydraulicControlReaches/H.txt", sep = "\t", header = FALSE) %>% 
+  as.matrix()
+hc_w <- read.csv("../data/HydraulicControlReaches/W.txt", sep = "\t", header = FALSE) %>% 
+  as.matrix()
+hc_s <- read.csv("../data/HydraulicControlReaches/S.txt", sep = "\t", header = FALSE) %>% 
+  as.matrix()
+hc_dA <- calcdA_mat(hc_w, hc_h)
+hc_dA_median <- matrix(rep(apply(hc_dA, 1, median), ncol(hc_dA)), ncol = ncol(hc_dA), byrow = FALSE)
+hc_dA_minimum <- matrix(rep(apply(hc_dA, 1, min), ncol(hc_dA)), ncol = ncol(hc_dA), byrow = FALSE)
+hc_dA2 <- hc_dA - hc_dA_median
+hc_dA3 <- hc_dA - hc_dA_minimum
+
+summary(t(hc_h))
+summary(t(hc_s))
+summary(t(hc_w))
+summary(t(hc_dA))
+summary(t(hc_dA2))
+summary(t(hc_dA3))
+```
+
+Here goes!
+
+```{r}
+A0est_med <- estA0(wmat = hc_w, smat = hc_s, damat = hc_dA2)
+A0est_min <- estA0(wmat = hc_w, smat = hc_s, damat = hc_dA3)
+summary(A0est_med)
+summary(A0est_min)
+
+coef(A0est_med)
+coef(A0est_med) - apply(hc_dA3, 1, median)
+
+coef(A0est_min) + apply(hc_dA3, 1, median)
+
+plot(coef(A0est_med), coef(A0est_min) + apply(hc_dA3, 1, median))
+abline(0, 1)
+
+termplots <- map(paste0("x", 1:16), ~ggTermPlot(foo, xvar = .))
+termplots[[4]]
+
+A0hats <- coef(foo) 
+
+plot(apply(hc_w, 1, median), A0hats, xlab = "Reach width (m)", ylab = "A0 estimate (m^2)")
+abline(0, 1)
+plot(apply(hc_s, 1, median), A0hats, xlab = "Median reach width (unitless)", ylab = "A0 estimate (m^2)")
+
+```
+
+
+PCA on data matrix
+
+```{r}
+bar <- eigen(cor(foo$model[, -1]))
+bar$values
+bar$vectors[, 16]
+```
+
+Hatvalues of matrix
+
+```{r}
+foox <- as.matrix(foo$model[,-1])
+solve(t(foox) %*% foox)
+
+
+```
+
+
+
+I think that's adequate for today. To be revisited in the future.
+
+Now on to playing with lisflood parameters.
+
+- Previously I did this in airSWOT notebook20180307.Rmd.
+
+```{r}
+read_lisProfile <- function(file) {
+  infile <- read_fwf(file, 
+                     fwf_empty(file, 
+                               c("ChanX", "ChanY", "Chainage", "Width", 
+                                 "Mannings", "Slope", "BankZ", "BedElev", 
+                                 "WaterElev", "WaterDepth", "Flow"), skip = 2), 
+                     skip = 2, col_types = "ddddddddddd")
+  infile
+}
+
+
+```
+
+I need to look at the relationship between inflow Q and outflow H so I can modify the boundary condition. 
+
+```{r}
+qin <- read.csv("../lisflood/toy_1/bdy_qin.tsv", sep = "\t")
+hout <- read.csv("../lisflood/toy_1/bdy_hout.tsv", sep = "\t")
+
+bdy <- left_join(qin, hout, by = "time_s")
+
+bdy %>% 
+  ggplot(aes(x = h_m, y = q_m3s)) + 
+  geom_point()
+```
+
+Based on this, use the following heights and flows:
+
+```{r}
+q_impose <- c(50, 75, 100, 125, 150, 175, 200, 250, 300)
+
+hfun <- approxfun(x = bdy$q_m3s, y = bdy$h_m)
+
+h_impose <- hfun(q_impose)
+h_impose
+```
+
+Now make into data.frame that I can write and easily coerce into lisflood format. 
+
+```{r}
+plot(bdy$time_s)
+```
+
+Looks like the thing to do would be to do a step function for Q and H. 
+
+```{r}
+time_sustain <- 86400 # How long to stay at each steady-flow condition
+time_change <- 10368 # How long to take to transition to next steady-state condition
+
+q_write <- rep(q_impose, each = 2)
+h_write <- rep(h_impose, each = 2)
+t_write <- cumsum(c(0, rep(c(time_sustain, time_change), 
+                           length.out = length(h_write)))) %>% 
+  `[`(1:length(h_write))
+
+plot(t_write, q_write, type = "l")
+```
+
+Looks good! Write it. 
+
+```{r}
+library(readr)
+write_tsv(data.frame(q_m3s = q_write, t_s = t_write), 
+          path = "../lisflood/q_ss.tsv")
+
+write_tsv(data.frame(h_m = h_write, t_s = t_write), 
+          path = "../lisflood/h_ss.tsv")
+```
+
+
+Done. Now run it in Lisflood. Done. Now read the results.
+
+```{r}
+prof_const <- read_lisProfile(file = "../lisflood/toy_1/results/res-river0-0006.profile")
+
+allprof_files <- list.files("../lisflood/toy_1/results/", pattern = "\\.profile$", 
+                            full.names = TRUE)
+allprof_const <- map(allprof_files, read_lisProfile) %>% 
+  setNames(1:length(allprof_files)) %>% 
+  bind_rows(.id = "time") %>% 
+  mutate(time = as.numeric(time))
+
+
+allprof_const %>% 
+  filter(ChanX == 2100) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = time, y = Slope)) +
+  geom_point()
+
+allprof_const %>% 
+  filter(time > 2) %>%
+  glimpse() %>% 
+  ggplot(aes(x = time, y = ChanX, fill = Flow)) +
+  geom_raster() +
+  scale_fill_gradient(low = "#ff0000", high = "#3300ff")
+
+allprof_const$Flow
+```
+

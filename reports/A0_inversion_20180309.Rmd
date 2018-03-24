@@ -1,0 +1,157 @@
+---
+output: html_document
+---
+
+
+### Problem setup
+
+Assume we have measurements of slope, width, and partial cross-section area for T times and N locations within a mass-conserved river segment. Then we can write
+
+
+$$
+\begin{aligned}
+Q_{it} &= \frac{1}{n} W_{it}^{-2/3} A_{it}^{5/3}S_{it}^{1/2} \\
+\implies Q^{3/5}_{it} & = A_{it}\Big(\frac{1}{n} W_{it}^{-2/3} S_{it}^{1/2} \Big)^{3/5}
+\end{aligned}
+$$
+For simplicity let $x_{it} = \Big(\frac{1}{n} W_{it}^{-2/3} S_{it}^{1/2} \Big)^{3/5}$, so that $Q^{3/5}_{it} = A_{it}x_{it}$. 
+
+
+
+### 2. Linearize
+
+The linearization to isolate $Q$ is necessarily different from that to isolate $A_0$. This is at the heart of the difference in inferrability of these two quantities. 
+
+From the above, we have
+$$
+Q^{3/5}_{it} = A_{it}x_{it} = (A_{0,i} + \delta A_{it}) x_{it}
+$$
+
+
+Note that this equation is linear in both $A_{0,i}$ and $Q_{it}$. 
+
+### 3. Mass conserve
+
+
+Steady-state mass conservation requires that $Q_{it} = Q_{i't}$ for all $i, i'$ in $1, 2, ..., N$. This is equivalent to  
+$$
+\sum_{i = 1}^N\omega_i A_{it} x_{it} = 0
+$$
+for any set of $\omega_i$'s such that $\sum_{i = 1}^N \omega_i = 0$. In matrix notation, this is
+
+
+$$
+(\mathbf{A} \circ \mathbf{X}) \mathbf{\omega} = \mathbf{0}
+$$
+where $\circ$ denotes the elementwise product. We can now split this into the unobserved and observed parts of area:
+$$
+((\mathbf{A_0} + \mathbf{\delta A}) \circ \mathbf{X}) \mathbf{\omega} = (\mathbf{A_0} \circ \mathbf{X}) \omega + (\mathbf{\delta A} \circ \mathbf{X}) \mathbf{\omega} =  \mathbf{0} \\
+\implies (\mathbf{A_0} \circ \mathbf{X}) \omega = (-\delta \mathbf{A} \circ \mathbf{X}) \omega
+$$
+A little math shows that the following representations of the LHS are equivalent:
+$$
+(\mathbf{A}_0 \circ \mathbf{X}) \omega = \mathbf{X} \mathbf{\Omega} \mathbf{a}_0 = \mathbf{X} (\mathbf{\omega} \circ \mathbf{a_0})
+$$
+where $\mathbf{\Omega}$ is the diagonal matrix whose diagonal entries are the elements of $\mathbf{\omega}$ and $\mathbf{a_0}$ is the the vector of $A_0$'s that is repeated to form the matrix $\mathbf{A_0}$, i.e. 
+
+
+$$
+\mathbf{A_0} = 
+
+\begin{bmatrix} 
+
+{a_0} \\
+{a_0} \\
+\vdots \\
+{a_0} \\
+
+\end{bmatrix}
+
+= 
+
+\begin{bmatrix} 
+
+A_{0,1} & A_{0,2} & ... & A_{0,N} \\
+A_{0,1} & A_{0,2} & ... & A_{0,N} \\
+\vdots \\
+A_{0,1} & A_{0,2} & ... & A_{0,N} \\
+
+
+\end{bmatrix}
+$$
+
+
+### 4. Inference procedure
+
+Given the above, the vector $\mathbf{a_0}$ can be inferred by solving the following linear model:
+
+
+$$
+\mathbf{X} \mathbf{\Omega} \mathbf{a}_0 = (-\delta \mathbf{A} \circ \mathbf{X}) \omega
+$$
+
+The model matrix, $\mathbf{X \Omega}$, may conceivably have fewer rows than columns; inference can be aided by selecting multiple $\omega$ vectors and appending the system as follows:
+
+$$
+\begin{bmatrix}
+\mathbf{X} \mathbf{\Omega_1} \\
+\mathbf{X} \mathbf{\Omega_2} \\
+\vdots \\
+\mathbf{X} \mathbf{\Omega_n}
+\end{bmatrix}
+ \mathbf{a}_0
+
+= 
+
+\begin{bmatrix}
+(-\delta \mathbf{A} \circ \mathbf{X}) \omega_1 \\
+(-\delta \mathbf{A} \circ \mathbf{X}) \omega_2 \\
+\vdots \\
+(-\delta \mathbf{A} \circ \mathbf{X}) \omega_n
+
+\end{bmatrix}
+
+
+$$
+
+### 5. Application to Pepsi datasets
+
+Some results on Pepsi cases.
+
+Relative error by case:
+
+![](../graphs/A0_relerr1.png)
+
+Relative error with linear model $R^2$:
+
+![](../graphs/A0_relerr_R2.png)
+
+
+Interestingly, the relative error on slope inference does not have a strong correlation with model fit. 
+
+Here is the model fit for all cases (that didn't produce errors):
+
+![](../graphs/A0lm_fit.png)
+
+Some other points:
+
+- Not related to mass conservation / steady-state assumptions
+- Manning's equation appears to fit relatively well in all cases. 
+
+
+#### Clues as to what is affecting fit
+
+Inspecting the relationships between variables in log space reveals some nonlinear relationships (which would mean nonmultiplicative in linear space). This appears to be a violation of Manning's equation assumptions. 
+
+- Here's Po (poor linear model fit but good A0 inference):
+
+![](../graphs/Po_termplot_a.png)
+![](../graphs/Po_termplot_s.png)
+![](../graphs/Po_termplot_w.png)
+
+
+- Here's Connecticut (good linear model fit but poor A0 inference):
+
+![](../graphs/Connecticut_termplot_a.png)
+![](../graphs/Connecticut_termplot_s.png)
+![](../graphs/Connecticut_termplot_w.png)

@@ -1,0 +1,180 @@
+---
+title: "Analysis of variance (ANOVA) on Manning's n"
+author: "Mark Hagemann"
+date: "March 19, 2018"
+output: 
+  html_document:
+    pandoc_args:
+    - --filter
+    - pandoc-eqnos
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+opts_knit$set(root.dir = "~/Documents/manningEval")
+```
+
+
+```{r, include = FALSE}
+library(ProjectTemplate)
+load.project()
+
+anovadf <- map(reachdata, possibly(swot_n_anova, otherwise = NA)) %>% 
+  (function(x) x[!is.na(x)]) %>% 
+  bind_rows(.id = "case") %>% 
+  group_by(case) %>% 
+  # mutate(pctTotVar = meansq / sum(meansq) * 100) %>% # Old, wrong version
+  mutate(pctTotVar = sumsq / sum(sumsq) * 100) %>% # Correct version
+  # mutate(pctTotVar = sumsq / length(sumsq)) %>%  # scaled to compare across locations
+  ungroup() %>% 
+  mutate(term = as.character(term),
+         term  = plyr::mapvalues(term, 
+                                from = c("locfac", "locfac:logd", "logd"),
+                                to = c("location", "location:depth", "depth")))
+```
+
+## Introduction
+
+The following is an investigation into the variability of $n$ in time and space, illustrated using Pepsi 1 cases. 
+
+Spatially, Manning's $n$ varies as bed material and/or roughness changes. Temporally, Manning's $n$ varies according to water depth--approximated as a power law--although this relationship is not known a priori. Thus, a model encompassing both spatial and temporal changes in $n$ is as follows:
+
+$$
+\log n_{it} = \mu + \alpha_{i} + \beta \log D_{it} + \gamma_{i} \log D_{it} + \epsilon_{it}
+$$ {#eq:eq1}
+
+where
+
+- $\mu$ is global average $\log n$
+- $\alpha_i$ is the deviance of time-average $\log n$ at location $i$ from its global average, $\mu$. 
+- $\beta$ is the spatially averaged slope of $\log n$ versus $\log D$. 
+- $\gamma_i$ is the difference between the slope of $\log n$ versus $\log D$ at location $i$, compared to its global average, $\beta$. 
+- $\epsilon_{it}$ is the residual error not explained by the other terms in the model. 
+
+(In order for these interpretations to hold vis a vis *averages*, $\log D$ must be adjusted so as to have mean of zero at each location $i$.)
+
+Analysis of variance (ANOVA) compares the amount of variance (across time and space) of $\log n$ that is explained by each part of the RHS of equation @eq:eq1. Note that $\mu$ is constant, and therefore explains no variance. That is:
+
+$$
+Var ({\log n_{it}}) = Var (\alpha_{i}) + Var (\beta \log D_{it}) + Var (\gamma_{i} \log D_{it}) + Var (\epsilon_{it})
+$$
+
+## Pepsi 1 Experiments
+
+ANOVA was conducted on using the model in equation @eq:eq1 on the Pepsi 1 cases, treating $n_{it} = Q_{it}^{-1} W_{it}^{-2/3} A_{it}^{5/3} S_{it}^{1/2}$. The results reveal the relative contributions to total $n$ variability from the model terms (Figure 1). Overall, the location effect, $\alpha$, was strongest, followed by the location-invariant depth effect, $\beta$, although the relative contributions of these effects varied considerably across cases. 
+
+```{r}
+anova_gg <- anovadf %>% 
+  filter(case != "Tanana") %>% 
+  ggplot(aes(x = term, color = case, y = pctTotVar)) +
+  geom_point() + 
+  geom_line(aes(group = case)) +
+  # scale_y_log10() +
+  theme_bw() +
+  ylab("Percent of total variance explained")
+
+anova_gg
+```
+
+*Figure 1: ANOVA results across all Pepsi cases. Translation to model terms: "depth" = $\alpha$, "location" = $\beta$, "location:depth" = $\gamma$, "Residuals" = $\epsilon$.*
+
+
+To illustrate the differences in variance contribution, three contrasting cases are further detailed below: Seine, Garonne Upstream, and Wabash. 
+
+### Seine: 
+
+The ANOVA output for Seine is
+
+```{r}
+anovadf %>% 
+  filter(case == "Seine") %>% 
+  knitr::kable(digits = 2)
+```
+
+The rightmost column indicates the location term, $\alpha$, explains over 98% of total variance in $\log n$, and location-invariant depth, $\beta$, explains most of the remainder. These results become more concrete in a plot of $\log n$ against $\log (A/W)$, with regression lines from equation 1 overlaid. 
+
+```{r}
+sndf <- swot_tidy(reachdata[["Seine"]]) %>% 
+  # glimpse() %>% 
+  mutate(logn = -2/3 * log(W) + 5/3 * log(A) + 1/2 * log(S) - log(Q), 
+         logd = log(A / W),
+         loc = as.factor(loc))
+sngg <- sndf %>% 
+  # filter(loc == 12) %>% 
+  ggplot(aes(x = logd, y = logn)) +
+  geom_point(aes(color = loc), size = 0.2) + 
+  stat_smooth(aes(group = loc, color = loc), method = "lm", se = FALSE) + 
+  theme_bw()
+sngg
+```
+
+The four reaches have vastly different average $n$ values, and while there is a significant depth effect for each reach, this explains far less of the total variability than the location effect. Hardly any of the total variability is unexplained by the model (residual variance is negligible). 
+
+### Garonne Upstream
+
+In contrast, Upstream Garonne has the following ANOVA output:
+
+```{r}
+anovadf %>% 
+  filter(case == "GaronneUpstream") %>% 
+  knitr::kable(digits = 2)
+```
+
+Here the location effect, $\alpha$, explains just under half of the total $\log n$ variance, and the location-invariant depth effect, $\beta$ is stronger, explaining 30% of variance. Additionally, the depth effect varies significantly across locaitons, and this extra variability accounts for a further 16% of variance. While the model still explains most of the total variance, 4.5% remains unexplained in the residuals. 
+
+This case is shown graphically below. Note the tighter clustering of average $\log n$ across locations, compared to Seine above. Also note the differences in slope of the regression lines (as accounted for by the $\gamma$ terms), and the imperfect fit resulting in substantial residuals, primarily due to unaccounted-for curvature in the $\log n : \log d$ relationships. 
+
+```{r}
+gudf <- swot_tidy(reachdata[["GaronneUpstream"]]) %>% 
+  # glimpse() %>% 
+  mutate(logn = -2/3 * log(W) + 5/3 * log(A) + 1/2 * log(S) - log(Q), 
+         logd = log(A / W),
+         loc = as.factor(loc))
+gugg <- gudf %>% 
+  # filter(loc == 12) %>% 
+  ggplot(aes(x = logd, y = logn)) +
+  geom_point(aes(color = loc), size = 0.2) + 
+  stat_smooth(aes(group = loc, color = loc), method = "lm", se = FALSE) + 
+  theme_bw()
+gugg
+```
+
+
+
+
+### Wabash
+
+The ANOVA output for Wabash is
+
+```{r}
+anovadf %>% 
+  filter(case == "Wabash") %>% 
+  knitr::kable(digits = 2)
+```
+
+In this case the difference in mean $\log n$ across locations is nearly zero, explaining just 0.57% of the total variance. Most of the model variance is in the time-invariant depth term (38% total variance), with a further 5.9% of variance coming from the location-dependent depth effect. In total, the model explains only 45% of $\log n$ variance, with the remaining 55% contained in the model residuals. 
+
+A graphical representation of this model illustrates the ANOVA outpt, as well as some insights into the model's shortcomings. Clearly there is nonlinear structure in the $\log n$ - $\log d$ relationship not accounted for in the model. This sort of behavior shows up in many of the Pepsi cases, suggesting a possible hysteresis effect. 
+
+```{r}
+wabdf <- swot_tidy(reachdata[["Wabash"]]) %>% 
+  # glimpse() %>% 
+  mutate(logn = -2/3 * log(W) + 5/3 * log(A) + 1/2 * log(S) - log(Q), 
+         logd = log(A / W),
+         loc = as.factor(loc))
+wabgg <- wabdf %>% 
+  # filter(loc == 12) %>% 
+  ggplot(aes(x = logd, y = logn)) +
+  geom_point(aes(color = loc), size = 0.2) + 
+  stat_smooth(aes(group = loc, color = loc), method = "lm", se = FALSE) + 
+  theme_bw()
+wabgg
+```
+
+
+## Conclusion
+
+Flow resistance is not constant in time or space even though several McFLI algorithms assume it is. The above analysis indicates that the spatial difference in average flow resistance is the strongest effect overall, but this varies substantially by river. This extra dependency introduces more paramters that are not knowable a priori, and pose an additional challenge to discharge inversion. The impacts on discharge inversion of knowing or not knowing the various spatial and temporal effects will be further explored in a future document.
+

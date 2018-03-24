@@ -1,0 +1,109 @@
+---
+title: "notebook20171207"
+author: "Mark Hagemann"
+date: "December 7, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Today I'm making that darn presentation. 
+
+Animation showing dA
+
+```{r}
+# copying this from SWOT project
+calcdA_vec <- function(w, h) {
+  words <- order(w)
+  
+  warr <- w[words]
+  harr <- h[words]
+  
+  delh <- c(0, diff(harr))
+  delA <- cumsum(warr * delh)
+  
+  dA <- 1:length(w)
+  dA[words] <- delA
+  dA
+}
+```
+
+Maybe start with an image
+
+```{r}
+dA_ggdf <- train_full %>% 
+  filter(!is.na(w_m), !is.na(h_m)) %>% 
+  group_by(xs) %>% 
+  mutate(n = n()) %>% 
+  ungroup() %>% 
+  filter(n < nn) %>%
+  filter(n == max(n)) %>% 
+  filter(xs == xs[1]) %>% 
+  select(Date, w_m, h_m, dA, n, xs, xsname) %>% 
+  mutate(w = w_m / 2)
+
+# nn <- dA_ggdf$n[1]
+nn <- 190.1 #
+
+
+glimpse(dA_ggdf)
+
+ggplot(dA_ggdf, aes(x = w_m, y = dA)) +
+  geom_point()
+
+plot(dA_ggdf$h_m)
+
+ggplot(dA_ggdf, aes(x = w, y = h_m, xend = -w, yend = h_m)) +
+  geom_segment()
+
+ggplot()
+```
+
+Hmm. Try Pepsi data?
+
+```{r}
+load("../../SWOT/cache/nc_r.RData")
+# load("../../swotData/data/Pepsi_v2.rda")
+
+sapply(nc_r, function(x) ncol(x[["h"]]))
+
+dA_ggdf <- with(nc_r$MississippiUpstream, 
+  data.frame(w_m = as.vector(w[1, ]),
+             h_m = as.vector(h[1, ]),
+             dA = as.vector(dA[1, ]))) %>% 
+  mutate(w = w_m / 2)
+
+ggplot(dA_ggdf, aes(x = w, y = h_m, xend = -w, yend = h_m)) +
+  geom_segment()
+```
+
+Picking up the next day. I'm ready to start making the animations for the AGU talk. I need functions to create the following:
+
+- timeseries animation `ts_anim(obs)`
+    - easy, fast, no MLE required
+- histogram animation (no density) `hist_anim(obs)`
+    - easy, fast, no MLE
+- histogram animation (with density) `mle_hist_anim(obs)`
+    - requires MLE for each timestep `mle_ts(factory, ...)`
+- A0 estimate timeseries animation `mle_ts_anim(obs, mlets)`
+    - requires MLE for each timestep `mle_ts(obs)`
+    - return list of gg objects, one for each parameter
+- Gridded likelihood animation `nll_contour_anim`
+    - requires nll for each gridpoint, each timestep `nll_grid(xvec, yvec, nllFactory, ..., accum = FALSE)`
+
+
+Make all of these simple functions of:
+
+- dA vector
+- prior vector (A0, sigmalogA_hat, sigmalogA_sd)
+
+result should be gg object, ready for gganimate()
+
+
+```{r}
+
+```
+
+

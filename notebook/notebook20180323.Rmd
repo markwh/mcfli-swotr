@@ -1,0 +1,197 @@
+---
+title: "notebook20180323"
+author: "Mark Hagemann"
+date: "March 23, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I'm going to do more function/package devel later, but first quantifying flow imbalance
+
+From notebook work, 2 error sources: time granularity, space granularity
+
+- $\frac{\Delta t}{\bar{Q}} \frac{\partial Q}{\partial t}$
+- $\frac{\Delta x}{\bar{Q}} \frac{\partial Q}{\partial x}$
+
+Total granularity error is sum of these.
+
+
+```{r}
+
+mycase <- "Platte"
+
+granerr <- function(qmat) {
+  myq <- qmat
+  dqdt <- apply(myq, 1, function(x) abs(diff(x)))
+  # dterr <- mean(dqdt) / mean(as.vector(myq))
+  dterr <- mean(dqdt / t(myq)[-1, ])
+  
+  dqdx <- apply(myq, 2, function(x) abs(diff(x)))
+  # dxerr <- mean(dqdx) / mean(as.vector(myq))
+  dxerr <- mean(dqdx / myq[-1, ])
+  
+  out <- data.frame(dx = dxerr, dt = dterr)
+  out
+}
+
+granerrs <- reachdata %>% 
+  map(~.$Q) %>% 
+  # map(~.^(3/5)) %>% # This to put into A0 inference space
+  map(granerr) %>% 
+  bind_rows(.id = "case")
+
+ge_gg <- granerrs %>% 
+  arrange(dx) %>% 
+  ggplot(aes(x = dx, y = dt)) +
+  geom_point(aes(color = case))
+
+plotly::ggplotly(ge_gg)
+```
+
+Strange that Severn doesn't have the same issues as Platte when it is almost as out of balance. This should become clearer when I build out the functions some more. 
+
+```{r}
+plot_DAWG(reachdata$Severn$Q)
+
+plot_DAWG(reachdata$Severn$Q[, -18]) + scale_y_log10()
+```
+
+What? That doesn't look right. 
+
+```{r}
+apply(reachdata$Severn$Q[, -18], 2, diff) %>% 
+  abs() %>% 
+  mean()
+
+mean(as.vector(reachdata$Severn$Q))
+```
+
+So the anser appears to be the order of division, average operations. Now fixed. 
+
+```{r}
+granerr(reachdata$Severn$Q[, -18])
+```
+
+I'm reasonably satisfied with this, although it may be difficult to assess without knowing Q. 
+
+Looks like I can estimate flow imbalance using S? Math looks to be:
+
+$$
+\frac{\partial Q}{\partial x} \frac{\Delta x}{Q} \approx \frac{\Delta S}{2 S}
+$$
+
+Try for comparison. 
+
+```{r}
+Smat <- reachdata$Platte$S
+granerr2 <- function(swotlist) {
+  rhsmat <- with(swotlist, manning_qdot(W, S, A))
+  diffs <- apply(rhsmat, 2, function(x) abs(diff(x)))
+  dxerr <- mean(diffs / rhsmat[-1, ]) / 2
+  dxerr
+}
+
+dxerrs_s <- reachdata %>% 
+  # map(~.$S) %>% 
+  map_dbl(granerr2)
+
+granerrs$dx_s <- dxerrs_s
+
+ge_gg2 <- granerrs %>% 
+  na.omit() %>% 
+  ggplot(aes(x = dx_s, y = dx, color = case)) +
+  geom_point()
+
+ge_gg2 +
+  scale_x_log10() +
+  scale_y_log10()
+
+plotly::ggplotly(ge_gg2)
+```
+
+Well that doesn't work. Clearly. Something wrong with math? Yes. RHS needs to account for spatial differences in A, W. 
+
+
+```{r}
+qdot <- with(reachdata$Platte, manning_qdot(W, S, A))
+```
+
+Next I need to know how this affects A0 inference. But first develop the functions more and maybe draft a vignette?
+
+- Yes, I like the idea of a vignette
+
+Realizing that my projects have gotten tangled. Think of an ecosystem:
+
+- swotData
+    - just i/o, basic utility funcitons, no inference
+- McMan
+    - Mass-conserved Manning equation fucntions
+- Lisfloodr
+    - i/o, possibly running, plotting, conversion to swotData, etc. 
+- Everything else just happens in a project
+
+But at this stage I shouldn't worry about making packages. Just put everything into its own lib/ script and work with a ***single project***
+
+- Transfer A0_identifiability to manningEval or vice versa?
+    - Yes, I *think* transfer to manningEval. 
+    
+### Back after working on project migration and work in lib/, reports/mcfli-swotr.Rmd
+
+Workflow is really coming together
+
+Now I can really look at lisflood output. 
+
+```{r}
+toyrches <- lis_reaches("../lisflood/toy_1/results_simple/")
+
+toydawg <- toyrches %>% 
+  filter(time > 17) %>%  # Added after looking at plot_DAWG below
+  filter(loc != 4) %>% 
+  swot_untidy()
+
+coef(estA0_list(toydawg))
+
+toydawg %>% 
+  ccf_lag() %>% 
+  swot_dqdx()
+
+toydawg$A <- toydawg$dA + apply(toydawg$W, 1, function(x) min(x[x>0]))
+
+with(toydawg, plot_DAWG(manning_qdot(W, S, A))) + scale_y_log10()
+with(ccf_lag(toydawg), plot_DAWG(manning_qdot(W, S, A))) + scale_y_log10()
+
+swot_dqdx(toydawg)
+```
+
+~~Huh, things work a lot better when I don't omit the first 17 time points.~~ Nvermind! That was including reach 4, which is a bad reach. 
+
+
+Next build out and apply Manning assumptions checks
+
+```{r}
+toyA0ests <- toydawg %>% 
+  ccf_lag() %>% 
+  estA0_list() 
+
+A0_R2(toyA0ests)
+A0_R2(estA0_list(toydawg))
+```
+
+```{r}
+A0_condno(toydawg %>% ccf_lag)
+```
+
+Not sure yet how to interpret these, but there they are. 
+
+Now on to Q-dependent measures
+
+- Exact flow imbalance
+
+```{r}
+swot_dqdx(toydawg)
+true_dqdx(toydawg$Q)
+```
+

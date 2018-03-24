@@ -1,0 +1,18 @@
+---
+title: "notebook20171205"
+author: "Mark Hagemann"
+date: "December 5, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Today I clean up some code before doing more analysis. 
+
+- Put likvis into lib/ (will eventually be moved to its own package)
+- Put new likelihood analysis into src/
+- Make sure new outlier filtering is in proper place in munge/
+- Clean up src/, include descriptive src/main.R.
+

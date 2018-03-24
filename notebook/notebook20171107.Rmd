@@ -1,0 +1,264 @@
+---
+title: "notebook20171107"
+output: html_document
+---
+
+
+Note: this is a post-hoc notebook made from an attempted clean script that got messy quick when I slowly realized I didn't know how to use the mle and mle2 functions. I figured it out, and decided I should preserve the mess. Now cleaning up the script in src/A0_likelihood.R.
+
+# A0 likelihood
+
+```{r}
+ao_loglik <- function(dA_vec, A0, sigsq_logA) {
+  logquan <- log(dA_vec + A0)
+  loglik <- sum(-logquan - 1/2 * log(sigsq_logA) - 
+                  1 / (2 * sigsq_logA) * (logquan - log(A0))^2)
+  loglik
+}
+```
+
+# try using mle function in stats4.
+
+```{r}
+makeNLL <- function(dA, trace = FALSE) {
+  out <- function(A0, sigsq_logA) {
+    
+    if (A0 <= 0 | sigsq_logA <= 0 | any(dA < -A0)) {
+      nll <- 1e23
+    } else {
+      logquan <- suppressWarnings(log(dA + A0))
+      loglik <- sum(-logquan - 1/2 * log(sigsq_logA) - 
+                      1 / (2 * sigsq_logA) * (logquan - log(A0))^2)
+      nll <- -loglik
+      
+    }
+    
+    # if (is.na(nll))
+    #   browser()
+    
+    if (trace) {
+      cat(A0, " ", sigsq_logA, " ", nll, "\n")
+    }
+    
+    nll
+  }
+}
+
+
+
+dA_test <- test_full %>% 
+  split(.$xs) %>% 
+  map(~.[["dA"]])
+
+dA_mle <- dA_test %>% 
+  map(makeNLL) %>% 
+  map(safely(mle), start = list(A0 = exp(9.1), sigsq_logA = 0.5))
+
+testfun <- makeNLL(dA = dA_test[[1]], trace = TRUE)
+test1 <- mle2(testfun, 
+              start = list(A0 = -min(dA_test[[1]]) + 1,
+                           sigsq_logA = 0.1))
+
+
+fakeA <- rlnorm(1000, 1.5, 0.3)
+fakedA <- fakeA - median(fakeA)
+
+testfun2 <- makeNLL(dA = fakedA, trace = TRUE)
+test2 <- mle2(testfun2, start = list(A0 = -min(fakedA) + 1,
+                                     sigsq_logA = 0.01))
+median(fakeA)
+
+nll2 <- function(A0, sigsq_logA) {
+  # if (A0 < 0 | sigsq_logA < 0)
+  if (A0 <= 0 | sigsq_logA <= 0 | any(fakedA < -A0)) {
+    nll <- 1e23
+  } else {
+    llik <- sum(dlnorm(fakedA + A0, meanlog = log(A0), sdlog = sqrt(sigsq_logA), 
+                       log = TRUE))
+    nll <- -llik
+  }
+
+  cat(A0, " ", sigsq_logA, " ", nll, "\n")
+  
+  nll
+}
+
+test3 <- mle2(nll2, start = list(A0 = -min(fakedA) + 1,
+                                 sigsq_logA = 0.01))
+
+```
+
+
+Optimization using lognormal isn't working very well. Try using normal instead.
+
+```{r}
+nll4 <- function(A0, sigsq_logA) {
+  if (A0 <= 0 | sigsq_logA <= 0 | any(fakedA < -A0)) {
+    nll <- 1e23
+  } else {
+    llik <- sum(dnorm(log(fakedA + A0), mean = log(A0), sd = sqrt(sigsq_logA), 
+                       log = TRUE))
+    llik = llik - sum(log(fakedA + A0)) # jacobian adjustment
+    nll <- -llik
+  }
+
+# cat(A0, " ", sigsq_logA, " ", nll, "\n")
+
+nll
+}
+
+test4 <- mle2(nll4, start = list(A0 = -min(fakedA) + 1,
+                                 sigsq_logA = 0.01))
+
+```
+
+
+
+So these are *exactly* the same. That's a good check, but not useful to the cause.
+Time to make my own gradient function, I guess. 
+
+```{r}
+makeGrad <- function(dA) {
+  gr <- function(A0, sigsq_logA) {
+    aptl <- - sum(-1 / (dA + A0) - 1 / sigsq_logA * (log(dA + A0) - log(A0)) *
+                    (1 / (dA + A0) - 1 / A0))
+    sigsqptl <- - sum(-1 / (2 * sigsq_logA) + 1 / (2 * sigsq_logA^2) * 
+                        (log(dA + A0) - log(A0))^2)
+    
+    cat("A0: ", A0, "; sigsq: ", sigsq_logA, "; gr: ", aptl, " ", sigsqptl, "\n")
+    
+    out <- c(aptl, sigsqptl)
+    out
+  }
+}
+
+
+mygr <- function(A0, sigsq_logA) {
+  aptl <- - sum(-1 / (fakedA + A0) - 1 / sigsq_logA * (log(fakedA + A0) - log(A0)) *
+                  (1 / (fakedA + A0) - 1 / A0))
+  sigsqptl <- - sum(-1 / (2 * sigsq_logA) + 1 / (2 * sigsq_logA^2) * 
+                      (log(fakedA + A0) - log(A0))^2)
+  cat("A0: ", A0, "; sigsq: ", sigsq_logA, "; gr: ", aptl, " ", sigsqptl, "\n")
+
+  out <- c(aptl, sigsqptl)
+  out
+}
+
+test5 <- mle2(nll4, start = list(A0  = -min(fakedA) + 1,
+                                 sigsq_logA = 0.01),
+              gr = mygr)
+
+```
+
+
+
+Yay! That works! I'm puzzled by its scoping though.
+Why can't it see dA without referencing global env?
+Test again using my function.
+
+
+```{r}
+test6 <- mle2(makeNLL(fakedA, trace = TRUE), start = list(A0  = -min(fakedA) + 1,
+                                 sigsq_logA = 0.01),
+              gr = mygr)
+```
+
+That's the same!
+
+
+## The next day ...
+
+I'm still having trouble implementing this via map. Maybe I should resort to `nlm` with the nll and gradient. 
+
+```{r}
+mygr <- function(A0, sigsq_logA) {
+  aptl <- - sum(-1 / (fakedA + A0) - 1 / sigsq_logA * (log(fakedA + A0) - log(A0)) *
+                  (1 / (fakedA + A0) - 1 / A0))
+  sigsqptl <- - sum(-1 / (2 * sigsq_logA) + 1 / (2 * sigsq_logA^2) * 
+                      (log(fakedA + A0) - log(A0))^2)
+  
+  out <- c(aptl, sigsqptl)
+  out
+}
+
+
+makeGrad <- function(dA) {
+  gr <- function(pars) {
+    A0 <- pars[1]; sigsq_logA <- pars[2]
+    aptl <- - sum(-1 / (dA + A0) - 1 / sigsq_logA * (log(dA + A0) - log(A0)) *
+                    (1 / (dA + A0) - 1 / A0))
+    sigsqptl <- - sum(-1 / (2 * sigsq_logA) + 1 / (2 * sigsq_logA^2) * 
+                        (log(dA + A0) - log(A0))^2)
+    
+    out <- c(aptl, sigsqptl)
+    out
+  }
+  gr
+}
+
+
+makeNLL <- function(dA, trace = FALSE, gr_att = TRUE) {
+  
+  gradfun <- makeGrad(dA)
+  
+  out <- function(pars) {
+    A0 <- pars[1]
+    sigsq_logA <- pars[2]
+    if (A0 <= 0 | sigsq_logA <= 0 | any(dA < -A0)) {
+      nll <- Inf
+    } else {
+      logquan <- suppressWarnings(log(dA + A0))
+      loglik <- sum(-logquan - 1/2 * log(sigsq_logA) - 
+                      1 / (2 * sigsq_logA) * (logquan - log(A0))^2)
+      nll <- -loglik
+      
+    }
+    if (trace) {
+      cat(A0, " ", sigsq_logA, " ", nll, "\n")
+    }
+    
+    if (gr_att) {
+      # browser()
+      attr(nll, "gradient") <- gradfun(c(A0, sigsq_logA))
+    }
+    
+    nll
+  }
+}
+```
+
+```{r}
+dA_test <- test_full %>% 
+  split(.$xs) %>% 
+  map(~.[["dA"]])
+
+foogr <- makeGrad(dA_test[[1]])
+foo <- makeNLL(dA_test[[1]])
+
+bar <- nlm(f = foo, p = c(1000, 0.1), print.level = 2)
+
+plist <- dA_test[1:5] %>% 
+  map(~c(-min(.) + 1, 0.1))
+
+testmap <- dA_test[1:5] %>% 
+  map(makeNLL) %>% 
+  map2(plist, function(...) suppressWarnings(nlm(...))) %>% 
+  map(~data.frame(A0 = .[["estimate"]][1], sigsq_logA = .[["estimate"]][2])) %>% 
+  bind_rows(.id = "xs")
+```
+
+~~OK, something's wrong with the scoping, and it's really bothering me. I guess I'll try using a regular loop.~~
+
+```{r}
+testmap <- list()
+for (i in 1:5) {
+  nlli <- makeNLL(dA_test[[i]])
+  testmap[[i]] <- nlm(nlli, p = c(1))
+}
+
+fakenll <- makeNLL(fakedA)
+fakenll(c(3.811866, 0.01))
+nlm(fakenll, p = c(4, 0.1)) # This is same answer as obtained via mle2. So that's good. 
+```
+
+Finally, I'm ready to put this in src/. 

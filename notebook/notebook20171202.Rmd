@@ -1,0 +1,316 @@
+
+
+Need to check that my AR(1) likelihood funciton and gradient are OK. 
+
+```{r}
+
+llik1 <- logPost_ar1(datadf = data.frame(obs, obsdates))
+
+# library(stats4)
+# library(bbmle)
+# test1 <- stats4::mle(llik1, start = list(params = c(7, 2)))
+# 
+# test2 <- mle2(llik1, start = list(params = c(7, 2)))
+
+test3 <- nlm(llik1, p = c(7, 2))
+```
+
+How to test if this works? Use synthetic data? Plot the data?
+
+```{r}
+test3
+hist(log(obs + exp(6.0605)))
+```
+
+I wonder if it's that one anomalous dA that's throwing this off. 
+
+```{r}
+which.min(obs)
+
+obsdf_omit <- data.frame(obs[-394], obsdates[-394])
+llik2 <- logPost_ar1(datadf = obsdf_omit)
+
+test4 <- nlm(llik2, p = c(7, 2))
+test4
+
+
+hist(log(obs[-394] + exp(6.588)))
+
+```
+
+```{r}
+xv1 <- seq(from = log(-min(obs - 1)), to = 10, length.out = 100)
+yv1 <- 10^seq(from = -1.5, to = 1, length.out = 100)
+gridar2 <- llikGrid(xvec = xv1, yvec = yv1, nllfun = llik2)
+
+
+priorvals <- list(priors$logA0_hat, 
+                  priors$sigmalogA_hat, 
+                  priors$sigmalogA_sd)
+
+llik3 <- logPost_ar1(datadf = obsdf_omit, 
+                     priors = priorvals)
+gridar3 <- llikGrid(xvec = xv1, yvec = yv1, nllfun = llik3)
+
+llikContour(gridar2, realx = log(real_A0), realy = real_sigmalogA)
+llikContour(gridar3, realx = log(real_A0), realy = real_sigmalogA)
+
+```
+
+That's... reasonable.
+
+```{r}
+foo <- mledf(logPost_ar1, 
+             datadf = data.frame(obs, obsdates), 
+             priors = priorvals,
+             p = c(7, 0.2), cumulative = TRUE)
+head(foo)
+
+plot(exp(foo$V1), ylim = c(0, 1000))
+abline(h = real_A0)
+plot(foo$V2, ylim = c(0, 0.65))
+abline(h = real_sigmalogA)
+```
+
+Compare against no-AR version
+
+```{r}
+mle_noar <- mledf(logPost, 
+             datadf = data.frame(obs, obsdates), 
+             priors = priorvals,
+             p = c(7, 0.2), cumulative = TRUE)
+
+head(mle_noar)
+
+
+plot(exp(mle_noar$V1), ylim = c(0, 1000))
+abline(h = real_A0)
+plot(mle_noar$V2, ylim = c(0, 0.65))
+abline(h = real_sigmalogA)
+```
+
+Because of the impact of this outlier, I think I need to go back through HydroSWOT and check for outliers in logQ ~ logA. Use studentized deleted residuals. 
+
+```{r}
+qalm_train <- train_full %>% 
+  mutate(logA = log(area_m2), logQ = ) %>% 
+  split(.$xs) %>% 
+  map(~lm(logQ ~ logA, data = .))
+```
+
+Potential issue that this does not check logA if logQ is missing or Inf. Can I use logA alone?
+
+```{r}
+hist(testdata$area_m2 %>% log() %>% scale() %>% `[`(-394))
+```
+
+Sure, but it's more difficult. Just do version using Q for now. Then redo log posteriors for test set. If there are still problem cases I can revisit.
+
+```{r}
+qalm_train <- train_full %>% 
+  mutate(logA = log(area_m2), logQ = ifelse(is.infinite(logQ), NA, logQ)) %>% 
+  split(.$xs) %>% 
+  map(~lm(logQ ~ logA, data = .))
+
+delres_train <- map(qalm_train, ~delResid(.) / sqrt(delMSE(.))) %>% 
+  map(~data.frame(sdr = .)) %>% 
+  bind_rows(.id = "xs") %>% 
+  group_by(xs) %>% 
+  mutate(obsno = 1:n()) %>% 
+  ungroup()
+
+train_full_sdr <- train_full %>% 
+  group_by(xs) %>% 
+  mutate(obsno = 1:n()) %>% 
+  ungroup() %>% 
+  mutate(xs = as.character(xs)) %>% 
+  left_join(delres_train, by = c("xs", "obsno"))
+
+
+
+```
+
+See some plots based on this.
+
+```{r}
+minsdrs <- train_full_sdr %>% 
+  group_by(xs) %>% 
+  summarize(minsdr = min(sdr), maxsdr = max(sdr)) %>% 
+  arrange(minsdr)
+
+maxsdrs <- train_full_sdr %>% 
+  group_by(xs) %>% 
+  summarize(minsdr = min(sdr), maxsdr = max(sdr)) %>% 
+  arrange(desc(maxsdr))
+
+i <- 1
+
+# train_full_sdr %>% 
+#   # filter(xs == "1053600") %>% 
+#   filter(xs == minsdrs$xs[i]) %>% #`[[`("area_m2")
+#   plot(logQ ~ log(area_m2), ., main = minsdrs$minsdr[i])
+# i <- i + 1
+
+train_full_sdr %>% 
+  # filter(xs == "1053600") %>% 
+  filter(xs == maxsdrs$xs[i]) %>% #`[[`("area_m2")
+  plot(logQ ~ log(area_m2), ., main = maxsdrs$maxsdr[i])
+i <- i + 1
+```
+
+6 seems like a reasonable threshold. Make a function that can be caled multiple times on hswot2 to remove these points. 
+
+```{r}
+
+refitRemove <- function(df, exclude = rep(FALSE, nrow(df)), thresh = 8) {
+  
+  
+  lm1 <- lm(logQ ~ logA, df[!exclude, ])
+  
+  nas <- is.na(df$logQ | is.na(df$logA))
+  
+  dsrs <- delResid(lm1) / sqrt(delMSE(lm1))
+  dsrbad <- abs(dsrs) > thresh
+  dsrbad[is.na(dsrbad)] <- FALSE
+  
+  exclude[!exclude & !nas] <- dsrbad
+  
+  out <- df
+  out$exclude <- exclude
+  
+  if (sum(dsrbad) > 0)
+    out <- refitRemove(out, exclude = exclude, thresh = thresh)
+  out
+}
+
+cleanse_A_outliers <- function(hswot2, thresh = 8) {
+  lms <- hswot2 %>% 
+    mutate(logA = log(area_m2), logQ = ifelse(is.infinite(logQ), NA, logQ)) %>% 
+    split(.$xs) %>% 
+    map(refitRemove, thresh = thresh) %>% 
+    bind_rows()
+
+  # hswot2_sdr <- hswot2 %>% 
+  #   group_by(xs) %>% 
+  #   mutate(obsno = 1:n()) %>% 
+  #   ungroup() %>% 
+  #   mutate(xs = as.character(xs)) %>% 
+  #   left_join(delres, by = c("xs", "obsno")) %>% 
+  #   mutate(dumpit = lt(thresh, abs(sdr)))
+  
+  print(sprintf("Removed %s area outliers based on logQ ~ logA sdr", 
+                sum(lms$exclude)))
+  
+  out <- lms %>% 
+    filter(!exclude) %>% 
+    select(-exclude, -logA) %>% 
+    group_by(xs) %>% 
+    mutate(n = n()) %>% 
+    ungroup() %>% 
+    filter(n > 30)
+  out
+}
+
+hswot3.1 <- hswot2
+
+# nr_old <- nrow(hswot3.1)
+# nr_new <- 0
+# while(nr_old != nr_new) {
+#   nr_old <- nrow(hswot3.1)
+hswot3.1 <- cleanse_A_outliers(hswot3.1)
+#   nr_new <- nrow(hswot3.1)
+# }
+
+
+foo <- filter(hswot2, xs %in% sample(xs, 10))
+bar <- cleanse_A_outliers(foo)
+# bar <- refitRemove(foo %>% mutate(logA = log(area_m2), logQ = ifelse(is.infinite(logQ), NA, logQ)))
+
+cache("hswot3")
+```
+
+This is done. Next I can redo the maximum likelihood estimates of A0. 
+
+```{r}
+
+noprior_train_ar1 <- train_full %>% 
+  split(.$xs) %>% 
+  map(~logPost_ar1(datadf = data.frame(.$dA, .$Date)))
+
+starts <- train_full %>% 
+  group_by(xs) %>% 
+  summarize(logA0_start = log(-min(dA)) + 1) %>% 
+  split(.$xs) %>% 
+  map(~c(.$logA0_start, 0.2))
+
+starts[[1]]  
+
+mynlm <- function(x, y) nlm(f = x, p = y)
+
+mle1_noprior <- map2(noprior_train_ar1, starts, nlm) %>%
+  map(~.$estimate) %>%
+  map(~as.data.frame(as.list(.))) %>%
+  map(setNames, c("logA0", "sigma_logA")) %>%
+  bind_rows(.id = "xs") %>% 
+  mutate(xs = as.numeric(xs))
+
+mle1_noprior
+
+train_val <- train_smry %>% 
+  transmute(xs, logA0_real = log(A0))
+train_val %>% 
+  left_join(mle1_noprior, by = "xs") %>% 
+  glimpse() %>% 
+  plot(logA0 ~ logA0_real, .)
+  
+
+
+```
+
+Neat, now try one with priors. 
+
+```{r}
+
+priordf <- stanPriorList %>% 
+  map(as.data.frame) %>% 
+  bind_rows(.id = "xs") %>% 
+  transmute(xs = as.numeric(xs), logA0_hat, sigmalogA_hat, sigmalogA_sd)
+
+train_ar2 <- train_full %>% 
+  left_join(priordf, by = "xs") %>% 
+  glimpse() %>% 
+  split(.$xs) %>% 
+  map(~logPost_ar1(datadf = data.frame(.$dA, .$Date), 
+                   priors = list(.$logA0_hat[1], 
+                                 .$sigmalogA_hat[1], 
+                                 .$sigmalogA_sd[1])))
+
+starts <- train_full %>% 
+  group_by(xs) %>% 
+  summarize(logA0_start = log(-min(dA)) + 1) %>% 
+  split(.$xs) %>% 
+  map(~c(.$logA0_start, 0.2))
+
+
+mynlm <- function(x, y) nlm(f = x, p = y)
+
+mle1_withprior <- map2(train_ar2, starts, nlm) %>%
+  map(~.$estimate) %>%
+  map(~as.data.frame(as.list(.))) %>%
+  map(setNames, c("logA0", "sigma_logA")) %>%
+  bind_rows(.id = "xs") %>% 
+  mutate(xs = as.numeric(xs))
+
+mle1_noprior
+
+train_val <- train_smry %>% 
+  transmute(xs, logA0_real = log(A0))
+train_val %>% 
+  left_join(mle1_withprior, by = "xs") %>% 
+  glimpse() %>% 
+  plot(logA0 ~ logA0_real, .)
+  
+
+```
+
+

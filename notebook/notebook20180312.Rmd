@@ -1,0 +1,499 @@
+---
+title: "notebook20180312"
+author: "Mark Hagemann"
+date: "March 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Today I am combing back through the A0 analysis from last week. Goal is to be methodical and document the steps. 
+
+Recall: we have a nice linear model for estimating A0 using $\delta A$, S, and W. Only it doesn't always work, and it is not immediately clear why not. In my last notebook I showed: 
+
+- A0 can be estimated using this method for most Pepsi cases (some failed)
+- Relative error on A0 varied widely, with some in excess of 200%. 
+- Linear model $R^2$ was not a reliable predictor of A0 inference accuracy. 
+- Spot checks of linear models showed some collinearity of predictors, but nothing catastrophic. 
+- Termplots of linear models showed good behavior in lots of cases, but not always great *fit* (again, not strongly related to A0 inference performance)
+- Mass conservation and steady-state assumption do not appear to affect A0 inference performance. 
+    - I should come up with a better way to quantify steady-state assumption validity.
+- Manning $R^2$ appears to be very good even in cases where A0 inference was poor
+    - ***Need to check this!*** Can Connecticut really have a minimum $R^2$ of 0.993?
+- Empirical Manning-type regressions (of logQ on logA, logW, logS) differed widely from Manning exponents. 
+    - Presumably collinearity was an issue, although I did not inventory this. 
+    - Nearness of empirical log-scale regression coefficients to Manning exponents did not appear to indicate goodness of A0 inference. 
+    - Substitution of emprical coefficients for Manning exponents in Connecticut A0 linear model did not improve A0 inference
+        - TODO: Replicate this. 
+
+
+Main action items are: 
+
+1. Perform Manning regressions on every reach in every Pepsi case. 
+    - Show termplots
+    - Aggregate coefficient values, fit statistics into table
+        - Verify results from before: Did Connecticut really have great fit?
+    - PCA on predictors
+2. Redo A0 lm for all cases
+    - Diagnose, fix ones that failed before
+    - Show termplots
+    - PCA on predictors
+3. Summarize results, diagnose inferrability in terms of e.g. data quality, river hydraulics 
+
+
+## 0. Data prep
+
+Copied from 0308.
+
+```{r}
+library(swotData)
+
+pep1cases <- names(Pepsi_v2)
+pep1ncs <- sprintf("../../swotData/data/NC_files/%s.nc", pep1cases)
+
+nclists <- map(pep1ncs, nc_list) %>% 
+  setNames(pep1cases)
+
+nclists$Platte$River_Info.gdrch <- 1:12 # get rid of 13-14.
+
+gdrchs <- map(nclists, ~.$River_Info.gdrch)
+
+keepvars <- c("W", "S", "A", "Q")
+reachparts <- paste0("Reach_Timeseries.", keepvars)
+
+zeroToNA <- function(mat) {
+  zeros <- mat <= 0
+  mat[zeros] <- NA
+  mat
+}
+
+reachdata0 <- nclists %>% 
+  map(~.[reachparts]) %>% 
+  map(setNames, keepvars) %>% 
+  map2(gdrchs, function(x, y) map(x, function(z) z[y, ])) %>% 
+  map(~map(., zeroToNA))
+
+reachncols <- map(reachdata0, ~ncol(.$A))
+
+reachA0 <- reachdata0 %>% 
+  map(~.$A) %>% 
+  map(apply, 1, median) %>% 
+  map2(reachncols, function(x, y) matrix(rep(x, y), ncol = y, byrow = FALSE))
+
+reachdA <- reachdata0 %>% 
+  map(~.$A) %>% 
+  map2(reachA0, function(x, y) x - y)
+
+reachdata <- map2(reachdata0, reachdA, function(x, y) {x$dA <- y; x})
+
+
+Qmats <- nclists %>% 
+  map(~.$Reach_Timeseries.Q[.$River_Info.gdrch, ])
+```
+
+
+## 1. Manning regressions
+
+```{r}
+manlmfun <- function(datalist, qmat) {
+  allist <- c(datalist, list(Q = qmat))
+  reachlsts <- map(allist, log) %>% 
+    map(split, f = 1:nrow(qmat))
+  reachdfs <- reachdfs <- map(1:nrow(qmat), ~map(reachlsts, function(x) x[[.]])) %>% 
+    map(as.data.frame)
+  # browser()
+  mandfs <- map(reachdfs, ~lm(Q ~ W + A + S, data = ., y = TRUE))
+  mandfs
+}
+
+manlms <- map2(reachdata, Qmats, possibly(manlmfun, otherwise = NA))
+
+which(is.na(manlms))
+
+manlms$Tanana <- NA # This one doesn't have usable A data either. 
+manlms <- manlms[!is.na(manlms)]
+```
+
+Try to fix failed cases. 
+
+- Fixed several by adding zeroToNA step in data prep. 
+- StLawrence are a lost cause, since no A data exists. 
+
+```{r}
+plot_DAWG(reachdata$Tanana$A)
+plot_DAWG(reachdata$StLawrenceUpstream$A)
+
+reachdata$StLawrenceDownstream <- NULL
+reachdata$StLawrenceUpstream <- NULL
+reachdata$Tanana <- NULL
+```
+
+Now make termplots and aggregate coefs, fit stats
+
+```{r}
+ggTermPlot(manlms$Connecticut[[1]], xvar = "A")
+ggTermPlot(manlms$Connecticut[[2]], xvar = "A")
+
+
+# coefs
+
+getcoefs <- function(lmlist) {
+  nreach <- length(lmlist)
+  nms <- paste0(1:nreach)
+  coeftbls <- map(setNames(lmlist, nms), function(x) summary(x)$coefficients) %>% 
+    map(~as.data.frame(.)) %>% 
+    map(setNames, c("est", "stderr", "t", "p")) %>% 
+    map(~mutate(., var = rownames(.))) %>% 
+    bind_rows(.id = "reach")
+  coeftbls
+}
+
+mancoefs <- manlms[!is.na(manlms)] %>% 
+  map(~getcoefs(.)) %>% 
+  bind_rows(.id = "case")
+
+ggcoefdf <- mancoefs %>% 
+  mutate(ymax = est + 2 * stderr, ymin = est - 2 * stderr)
+
+ggcoef_w <- ggcoefdf %>% 
+  filter(var == "W") %>% 
+  ggplot(aes(x = case, y = est)) +
+  geom_pointrange(aes(color = case, ymin = ymin, ymax = ymax)) +
+  geom_hline(aes(yintercept = -2/3)) +
+  theme(axis.text.x = element_text(angle = 90))
+
+ggcoef_s <- ggcoefdf %>% 
+  filter(var == "S") %>% 
+  ggplot(aes(x = case, y = est)) +
+  geom_pointrange(aes(color = case, ymin = ymin, ymax = ymax)) +
+  geom_hline(aes(yintercept = 1/2)) +
+  theme(axis.text.x = element_text(angle = 90))
+
+ggcoef_a <- ggcoefdf %>% 
+  filter(var == "A") %>% 
+  ggplot(aes(x = case, y = est)) +
+  geom_pointrange(aes(color = case, ymin = ymin, ymax = ymax)) +
+  geom_hline(aes(yintercept = 5/3)) +
+  theme(axis.text.x = element_text(angle = 90))
+
+# plotly::ggplotly(ggcoef_w)
+# plotly::ggplotly(ggcoef_s)
+# plotly::ggplotly(ggcoef_a)
+
+# GoF stats
+manR2 <- map(manlms, function(x) data.frame(R2 = map_dbl(x, markstats::Q2), 
+                                            reach = as.character(1:length(x)))) %>% 
+  bind_rows(.id = "case")
+
+ggcoefdf %>% 
+  left_join(manR2, by = c("case", "reach")) %>% 
+  filter(var == "A") %>% 
+  ggplot(aes(x = R2, y = est)) +
+  geom_pointrange(aes(color = case, ymin = ymin, ymax = ymax)) +
+  geom_hline(aes(yintercept = 5/3)) +
+  theme(axis.text.x = element_text(angle = 90))
+
+# termplots
+
+allTermplots_mod <- function(model) {
+  xvars <- names(model$model)[-1]
+  out <- map(xvars, ~ggTermPlot(model, xvar = ., data = model$model))
+  out
+}
+
+allTermplots_case <- function(modlist) {
+  map(setNames(modlist, paste0("reach", 1:length(modlist))),
+      allTermplots_mod)
+}
+
+gglist <- map(manlms, possibly(allTermplots_case, otherwise = NA))
+
+gglist$Platte$reach6[[3]]
+```
+
+## 1.5: Canonical Manning exponents--how well does this explain data?
+
+HOW TO QUANTIFY?!
+
+Idea: $(QnA^{-5/3})^{3/5} = (W^{-2/3}S^{1/2})^{3/5}$. Look at $R^2$ of LHS on RHS for each case and reach. 
+
+```{r}
+makePartData <- function(lst, medianQ = FALSE) {
+  
+  Qmat <- lst$Q
+  Wmat <- lst$W
+  Amat <- lst$A
+  Smat <- lst$S
+  
+  if (medianQ) {
+    Q_median <- apply(Qmat, 2, median)
+    Qmat_median <- matrix(rep(Q_median, nrow(Wmat)), nrow = nrow(Wmat), byrow = TRUE)
+    Qmat <- Qmat_median
+  }
+  # browser()
+  nreach <- nrow(Wmat)
+  ntime <- ncol(Wmat)
+  
+  lhsmat <- t((Qmat * Amat^(-5/3))^(3/5))
+  rhsmat <- t((Wmat^(-2/3) * Smat^(1/2))^(3/5))
+  
+  outdf <- data.frame(lhs = as.vector(lhsmat), rhs = as.vector(rhsmat), 
+                      reach = rep(1:nreach, each = ntime))
+  outdf
+}
+
+partR2df <- map(reachdata, makePartData, medianQ = TRUE) %>% 
+  bind_rows(.id = "case")
+
+partR2df %>% 
+  # filter(case == "Connecticut") %>% 
+  ggplot(aes(x = rhs, y = lhs)) +
+  geom_point(aes(color = reach)) +
+  facet_wrap(~case, scales = "free")
+
+
+lm_nointercept <- function(x, y) {
+  mod <- lm(y ~ 0 + x, data = data.frame(x = x, y = y), y = TRUE)
+  out <- mod
+  out
+}
+R2hack <- function(mod) {
+  pred <- predict(mod)
+  out <- markstats::R2(x = mod$y, pred)
+  out
+}
+
+partR2res0 <- na.omit(partR2df)
+partR2lm <- partR2res0 %>% 
+  split(.$case) %>% 
+  map(~lm_nointercept(x = .$rhs, y = .$lhs))
+
+map_dbl(partR2lm, markstats::Q2) %>% sort()
+map_dbl(partR2lm, R2hack) %>% sort()
+```
+
+I should really be doing this for individual reaches. And keep track of which ones fail the test. 
+
+```{r}
+
+partR2res0 <- na.omit(partR2df) %>% 
+  mutate(casereach = paste0(case, reach))
+partR2lm <- partR2res0 %>% 
+  split(.$casereach) %>% 
+  map(~lm_nointercept(x = .$rhs, y = .$lhs))
+
+partR2res1 <- data.frame(casereach = names(partR2lm), 
+                        R2 = map_dbl(partR2lm, markstats::Q2))
+
+partR2res2 <- left_join(partR2res0, partR2res1, by = "casereach")
+
+
+```
+
+Now I can apply a sliding filter for R2 at reach scale to select reaches to use in A0est calculations. 
+
+
+```{r}
+ggTermPlot(partR2lm$SacramentoUpstream1, xvar = "x", 
+           data = partR2lm$SacramentoUpstream$model)
+foo <- lm(lhs ~ 0 + rhs, data = filter(partR2res0, case == "SacramentoUpstream"))
+summary(foo)
+
+partR2res0 %>% 
+  filter(case == "SacramentoUpstream") %>% 
+  ggplot(aes(x = rhs, y = lhs)) +
+  geom_point(aes(color = reach)) +
+  stat_smooth(method = "lm", formula = y ~ x + 0)
+
+
+
+```
+
+
+## 2. A0 lm for all cases
+
+```{r}
+estA0_list <- function(reachlist, keeprows = "all") {
+  if (length(keeprows) == 1 && keeprows == "all")
+    keeprows <- 1:nrow(reachlist$W)
+  with(reachlist, estA0(wmat = W[keeprows, ], 
+                        smat = S[keeprows, ], 
+                        damat = dA[keeprows, ]))
+}
+
+# Control on which reaches to keep
+minR2 <- -Inf
+keeprowlist <- partR2res2 %>% 
+  split(f = .$case) %>%
+  map(~filter(., R2 > minR2)) %>% 
+  map(~unique(.$reach))
+  
+A0lms <- map2(reachdata, keeprowlist, 
+              possibly(function(x, y) estA0_list(reachlist = x, keeprows = y), 
+                       otherwise = NA))
+summary(A0lms$Connecticut)
+which(is.na(A0lms))
+A0lms <- A0lms[!is.na(A0lms)]
+```
+
+What's wrong with Platte?
+
+- Missing A for a couple reaches. Deja vu, man. 
+- FIXED. Just put these into gdrch
+
+Now get errors.
+
+```{r}
+predA0 <- map(A0lms, coef) %>% 
+  map2(keeprowlist[names(A0lms)], function(x, y) setNames(x, y))
+trueA0 <- map2(reachdata[names(predA0)], keeprowlist[names(predA0)], 
+               function(x, y) (x$A - x$dA)[y,1])
+
+
+A0evaldf <- map2(trueA0[names(predA0)], predA0, 
+                 function(x, y) data.frame(true = x, pred = y, reach = names(y))) %>% 
+  bind_rows(.id = "case") %>% 
+  group_by(case) %>% 
+  mutate(relerr = (pred - true) / true)
+
+glimpse(A0evaldf)
+```
+
+Plot it!
+
+```{r}
+A0evaldf %>% 
+  ggplot(aes(x = case, y = relerr)) +
+  geom_point(aes(color = case)) +
+  theme(axis.text.x = element_text(angle = 90))
+
+A0evaldf %>% 
+  mutate(reach = as.numeric(reach)) %>% 
+  left_join(partR2res2, by = c("case", "reach")) %>% 
+  ggplot(aes(x = R2, y = relerr, color = case)) +
+  geom_point(aes(group = case)) +
+  xlim(-1, 1)
+```
+
+I now want to develop this further and make show relative error (across all cases) as a function of minimum R2 in partial Manning regression. This will take some data assembly. 
+
+```{r}
+
+calcRelErr_minR2 <- function(minR2) {
+  
+  keeprowlist <- partR2res2 %>% 
+    split(f = .$case) %>%
+    map(~filter(., R2 > minR2)) %>% 
+    map(~unique(.$reach))
+    
+  A0lms <- map2(reachdata, keeprowlist, 
+                possibly(function(x, y) estA0_list(reachlist = x, keeprows = y), 
+                         otherwise = NA))
+  A0lms <- A0lms[!is.na(A0lms)]
+  
+  predA0 <- map(A0lms, coef)
+  trueA0 <- map2(reachdata[names(predA0)], keeprowlist[names(predA0)], 
+                 function(x, y) (x$A - x$dA)[y,1])
+  
+  
+  out <- map2(trueA0[names(predA0)], predA0, 
+                   function(x, y) data.frame(true = x, pred = y)) %>% 
+    bind_rows(.id = "case") %>% 
+    group_by(case) %>% 
+    mutate(relerr = (pred - true) / true)
+  
+  out
+}
+
+foo <- calcRelErr_minR2(0.9)
+
+errByR2 <- map(c(-Inf, 0, 0.25, 0.5, 0.75, 0.9), calcRelErr_minR2) %>% 
+  setNames(c("none", as.character(c(0, 0.25, 0.5, 0.75, 0.9)))) %>% 
+  bind_rows(.id = "threshold")
+errByR2$threshold <- as.factor(errByR2$threshold)
+
+
+glimpse(errByR2)
+```
+
+Now I can make that plot!
+
+```{r}
+foo <- errByR2 %>% 
+  mutate(absrelerr = abs(relerr),
+         threshold = relevel(threshold, ref = "none")) %>% 
+  group_by(case, threshold) %>% 
+  mutate(medianerr = median(absrelerr)) %>% 
+  ggplot(aes(x = threshold, y = absrelerr, color = case)) + 
+  geom_point() +
+  geom_line(aes(y = medianerr, group = case))
+foo
+```
+
+That's...perplexing. Only thing I can think of to do next is to impose mass conservation and redo. 
+
+
+## Old stuff below 
+
+Maybe look at max p value as a predictor
+
+```{r}
+ggcoefdf %>% 
+  left_join(manR2, by = c("case", "reach")) %>% 
+  # filter(var == "A") %>% 
+  ggplot(aes(x = R2, y = p)) +
+  geom_point(aes(color = var)) +
+  # geom_hline(aes(yintercept = 5/3)) +
+  theme(axis.text.x = element_text(angle = 90))
+
+maxpgg <- ggcoefdf %>% 
+  filter(var != "(Intercept)") %>% 
+  group_by(case) %>% 
+  summarize(max_p = max(p)) %>% 
+  left_join(A0evaldf, by = "case") %>% 
+  ggplot(aes(x = max_p, y = relerr)) +
+  geom_point(aes(color = case))
+
+plotly::ggplotly(maxpgg)
+```
+
+This narrative not fit by:
+
+- MississippiDownstream and SacramentoUpstream (low max P, poor accuracy)
+- Ganges, GaronneUpstream (high max P, good accuracy)
+
+```{r}
+gglist$MississippiDownstream$reach1[[3]]
+```
+
+It may be time to start looking at Durand space. 
+
+```{r}
+A0lms$MississippiDownstream$model %>% 
+  sample_n(1000) %>% 
+  pairs()
+
+plot(A0lms$MississippiDownstream)
+plot(A0lms$SacramentoUpstream)
+
+gglist$SacramentoUpstream$reach1[[3]]
+```
+
+
+```{r}
+reachdata_df <- reachdata %>% 
+  map(~tibble(W = as.vector(t(.$W)), S = as.vector(t(.$S)), 
+             A = as.vector(t(.$A)), dA = as.vector(t(.$dA)),
+             Q = as.vector(t(.$Q)),
+             reach = rep(1:nrow(.$W), each = ncol(.$W)),
+             A0 = A - dA)) %>% 
+  bind_rows(.id = "case")
+
+
+```
+
+
+

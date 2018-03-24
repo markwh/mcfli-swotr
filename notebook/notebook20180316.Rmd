@@ -1,0 +1,556 @@
+---
+title: "notebook20180316"
+author: "Mark Hagemann"
+date: "March 16, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Some quick-and-dirty plots that will inform how I structure the shiny vis. 
+
+```{r}
+library(swotData)
+
+pep1cases <- names(Pepsi_v2)
+pep1ncs <- sprintf("../../swotData/data/NC_files/%s.nc", pep1cases)
+
+nclists <- map(pep1ncs, nc_list) %>% 
+  setNames(pep1cases)
+
+nclists$Platte$River_Info.gdrch <- 1:12 # get rid of 13-14.
+
+gdrchs <- map(nclists, ~.$River_Info.gdrch)
+
+keepvars <- c("W", "S", "A", "Q")
+reachparts <- paste0("Reach_Timeseries.", keepvars)
+
+zeroToNA <- function(mat) {
+  zeros <- mat <= 0
+  mat[zeros] <- NA
+  mat
+}
+
+reachdata0 <- nclists %>% 
+  map(~.[reachparts]) %>% 
+  map(setNames, keepvars) %>% 
+  map2(gdrchs, function(x, y) map(x, function(z) z[y, ])) %>% 
+  map(~map(., zeroToNA))
+
+reachdata0$Severn$W <- reachdata0$Severn$W[, -1]
+reachdata0$Severn$A <- reachdata0$Severn$A[, -1]
+reachdata0$Severn$S <- reachdata0$Severn$S[, -1]
+reachdata0$Severn$Q <- reachdata0$Severn$Q[, -1]
+
+reachdata0$Platte$W <- reachdata0$Platte$W[, -1]
+reachdata0$Platte$A <- reachdata0$Platte$A[, -1]
+reachdata0$Platte$S <- reachdata0$Platte$S[, -1]
+reachdata0$Platte$Q <- reachdata0$Platte$Q[, -1]
+
+reachncols <- map(reachdata0, ~ncol(.$A))
+
+reachA0 <- reachdata0 %>% 
+  map(~.$A) %>% 
+  map(apply, 1, median) %>% 
+  map2(reachncols, function(x, y) matrix(rep(x, y), ncol = y, byrow = FALSE))
+
+reachdA <- reachdata0 %>% 
+  map(~.$A) %>% 
+  map2(reachA0, function(x, y) x - y)
+
+reachdata <- map2(reachdata0, reachdA, function(x, y) {x$dA <- y; x})
+
+
+Qmats <- nclists %>% 
+  map(~.$Reach_Timeseries.Q[.$River_Info.gdrch, ])
+```
+
+Calculate parameters.
+
+```{r}
+manNlist <- map(reachdata, manningN_list)
+constNlist <- map(manNlist, median, na.rm = TRUE)
+
+manQlist <- map2(reachdata, constNlist, function(x, y) manningQ_list(x, y))
+
+trueQlist <- map(reachdata, `[[`, "Q")
+
+manQdf <- manQlist %>% 
+  map(~data.frame(manQ = as.vector(.), 
+                  time = rep(1:ncol(.), each = nrow(.)),
+                  loc = rep(1:nrow(.), ncol(.)))) %>% 
+  bind_rows(.id = "case")
+
+trueQdf <- trueQlist %>% 
+  map(~data.frame(trueQ = as.vector(.), 
+                  time = rep(1:ncol(.), each = nrow(.)),
+                  loc = rep(1:nrow(.), ncol(.)))) %>% 
+  bind_rows(.id = "case")
+
+Qdf <- left_join(manQdf, trueQdf, by = c("time", "loc", "case"))
+
+Qdf %>% 
+  sample_n(10000) %>% 
+  ggplot(aes(x = trueQ, y = manQ)) +
+  geom_point(aes(color = case), alpha = 0.4) +
+  scale_x_log10() + scale_y_log10() +
+  theme_minimal() +
+  geom_abline(slope = 1, intercept = 0)
+```
+
+In the interactive version I'll be able to filter this and identify points. 
+
+Now work on getting something like termplots. 
+
+```{r}
+partManResid = function(Q, A, W, S, n, Aexp = 5/3, Wexp = -2/3, Sexp = 1/2) {
+  Qpart_W <- Q / A^Aexp * S^Sexp / n
+  Qpart_S <- Q / A^Aexp * W^Wexp / n
+  Qpart_A <- Q / W^Wexp * S^Sexp / n
+  
+  out <- list(wpart = Qpart_W,
+              spart = Qpart_S,
+              apart = Qpart_A)
+  
+  out
+}
+
+partManResid_list <- function(datalist) {
+  A <- datalist$A
+  W <- datalist$W
+  S <- datalist$S
+  Q <- datalist$Q
+  n <- datalist$n
+  
+  out <- partManResid(Q = Q, A = A, W = W, S = S, n = n)
+  out
+}
+
+case1 <- "Wabash"
+partRes1 <- partManResid_list(datalist = c(reachdata[[case1]],
+                                           list(n = constNlist[[case1]])))
+
+plot(log(reachdata[[case1]]$S), log(partRes1$spart))
+abline(0, 1/2)
+
+```
+
+
+I've outlined the major parts of the visualization in my (physical) notebook. 
+
+Remaining figs:
+
+- stats boxplots across all cases 
+    - RRMSE, NRMSE
+- case-scale hydrograph
+- reach-scale data tables
+- reach-scale "empirical" exponents comparison to Manning exponents
+    - along with condition number?
+
+```{r}
+evalstatdf <- Qdf %>% 
+  glimpse() %>% 
+  group_by(case, loc) %>% 
+  summarize(RRMSE = RRMSE(pred = manQ, meas = trueQ),
+            NRMSE = NRMSE(pred = manQ, meas = trueQ),
+            rBIAS = rBIAS(pred = manQ, meas = trueQ),
+            NSE = NSE(pred = manQ, meas = trueQ)) %>% 
+  ungroup()
+  
+allstats_gg <- evalstatdf %>%
+  gather(key = stat, value = value, -case, -loc) %>% 
+  ggplot(aes(x = stat, y = value)) +
+  geom_boxplot() + 
+  theme_bw()
+
+allstats_gg
+ggsave("../graphs/nplots/allstats_boxplot1.png")
+
+
+rrmse_gg <- evalstatdf %>% 
+  filter(!is.na(RRMSE)) %>% 
+  ggplot(aes(x = case, y = RRMSE)) + 
+  # geom_boxplot() +
+  coord_flip() +
+  geom_point(size = 0.5)
+rrmse_gg
+ggsave("../graphs/nplots/rrmse_constant_n.png")
+
+nrmse_gg <- evalstatdf %>% 
+  filter(!is.na(NRMSE)) %>% 
+  ggplot(aes(x = case, y = NRMSE)) + 
+  # geom_boxplot() +
+  coord_flip() +
+  geom_point(size = 0.5) +
+  theme_bw() +
+  xlab("")
+nrmse_gg
+ggsave("../graphs/nplots/nrmse_constant_n.png")
+```
+
+
+Now case-scale hydrograph. (Should be easy)
+
+```{r}
+case2 <- "Platte"
+Qdf %>% 
+  filter(case == case2) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = time, group = loc)) +
+  geom_line(aes(y = manQ), linetype = 1) +
+  geom_line(aes(y = trueQ), linetype = 2, color = "red") +
+  theme_bw() +
+  scale_y_log10()
+```
+
+
+Fine. Now I need to make variable-n predictions. 
+
+- claim is that there is an exponential relationship between n and A/W
+
+
+```{r}
+manNlist <- map(reachdata, manningN_list)
+awlist <- map(reachdata, function(x) x$A / x$W)
+
+case3 <- "Severn"
+plot(awlist[[case3]], manNlist[[case3]], log = "xy")
+
+```
+
+This does not convince me! Certainly the relationship does not hold across reaches. In any case, I can predict and plot. 
+
+
+```{r}
+n_aw_dfs = map2(manNlist, awlist, 
+                function(x, y) data.frame(logn = log(as.vector(x)), 
+                                          logd = log(as.vector(y))))
+
+n_aw_lms = map(n_aw_dfs, possibly(~lm(logn ~ logd, data = .), otherwise = NA))
+
+predictVarN = function(datalist, mod) {
+  d <- datalist$A / datalist$W
+  logd_mat <- log(d)
+  logd_vec <- as.vector(logd_mat)
+  npred_vec <- predict(mod, newdata = data.frame(logd = logd_vec))
+  outmat <- matrix(exp(npred_vec), nrow = nrow(d))
+  outmat
+}
+
+varNlist <- map2(reachdata, n_aw_lms, possibly(predictVarN, otherwise = NA))
+
+case4 <- "Platte"
+plot(manNlist[[case4]], varNlist[[case4]])
+abline(0, 1)
+```
+
+
+
+```{r}
+manQlist_vn <- map2(reachdata, varNlist, function(x, y) manningQ_list(x, y))
+
+trueQlist <- map(reachdata, `[[`, "Q")
+
+manQdf_vn <- manQlist_vn %>% 
+  map(~data.frame(manQ = as.vector(.), 
+                  time = rep(1:ncol(.), each = nrow(.)),
+                  loc = rep(1:nrow(.), ncol(.)))) %>% 
+  bind_rows(.id = "case")
+
+
+Qdf_vn <- left_join(manQdf_vn, trueQdf, by = c("time", "loc", "case"))
+```
+
+Now look at stats
+
+
+```{r}
+evalstatdf_vn <- Qdf_vn %>% 
+  glimpse() %>% 
+  group_by(case, loc) %>% 
+  summarize(RRMSE = RRMSE(pred = manQ, meas = trueQ),
+            NRMSE = NRMSE(pred = manQ, meas = trueQ),
+            rBIAS = rBIAS(pred = manQ, meas = trueQ),
+            NSE = NSE(pred = manQ, meas = trueQ)) %>% 
+  ungroup()
+  
+allstats_vn_gg <- evalstatdf_vn %>%
+  gather(key = stat, value = value, -case, -loc) %>% 
+  ggplot(aes(x = stat, y = value)) +
+  geom_boxplot() + 
+  theme_bw()
+
+allstats_vn_gg
+ggsave("../graphs/nplots/allstats_boxplot2.png")
+
+rrmse_vn_gg <- evalstatdf_vn %>% 
+  filter(!is.na(RRMSE)) %>% 
+  ggplot(aes(x = case, y = RRMSE)) + 
+  # geom_boxplot() +
+  coord_flip() +
+  geom_point(size = 0.5)
+rrmse_vn_gg
+ggsave("../graphs/nplots/rrmse_variable_n_1.png")
+
+nrmse_vn_gg <- evalstatdf_vn %>% 
+  filter(!is.na(NRMSE)) %>% 
+  ggplot(aes(x = case, y = NRMSE)) + 
+  # geom_boxplot() +
+  coord_flip() +
+  geom_point(size = 0.5) +
+  theme_bw() +
+  xlab("")
+nrmse_vn_gg
+ggsave("../graphs/nplots/nrmse_variable_n_1.png")
+nrmse_gg
+```
+
+
+Combine together for boxplots.
+
+```{r}
+evalstatdf_g <- evalstatdf %>%
+  gather(key = stat, value = value, -case, -loc)
+evalstatdf_vn_g <- evalstatdf_vn %>%
+  gather(key = stat, value = value, -case, -loc)
+
+
+
+allstats_both_gg <- left_join(evalstatdf_g, evalstatdf_vn_g, 
+                            by = c("case", "loc", "stat")) %>%
+  rename(constant = value.x, variable = value.y) %>% 
+  gather(key = n_treatment, value = value, -case, -loc, -stat) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = stat, y = value)) +
+  geom_boxplot(aes(fill = n_treatment)) + 
+  theme_bw()
+allstats_both_gg
+```
+
+What if I also vary in space (and let lm vary in space)?
+
+
+
+```{r}
+
+spaManN_vecs <- map(manNlist, ~split(., f = 1:nrow(.)))
+spaAW_vecs <- map(awlist, ~split(., f = 1:nrow(.)))
+
+make_spa_lms <- function(x, y) map2(x, y, function(w, z) lm(logn ~ logd, 
+                                      data = data.frame(logn = log(w), 
+                                                        logd = log(z))))
+
+spaN_AW_lms <- map2(spaManN_vecs, spaAW_vecs, 
+                    possibly(make_spa_lms, otherwise = NA))
+
+predlmsnow <- function(lmlist, veclist) {
+  map2(lmlist, veclist, function(x, y) predict(x, newdata = data.frame(logd = log(y))))
+}
+
+spaN_preds <- map2(spaN_AW_lms, spaAW_vecs, 
+                   possibly(predlmsnow, otherwise = NA))
+
+toMatrix <- function(lst) {
+  t(as.matrix(as.data.frame(map(lst, unname))))
+}
+
+spaN_predmats <- map(spaN_preds, possibly(toMatrix, otherwise = NA))
+
+
+
+varNlist2 <- map(spaN_predmats, possibly(exp, otherwise = NA))
+
+case5 <- "Po"
+plot(manNlist[[case5]], varNlist2[[case5]], xlab = "true Manning n", ylab = "predicted Manning n")
+abline(0, 1)
+```
+
+Now I can do the ggplots again. 
+
+```{r}
+manQlist_vn2 <- map2(reachdata, varNlist2, possibly(manningQ_list, otherwise = NA))
+
+trueQlist <- map(reachdata, `[[`, "Q")
+
+manQdf_vn2 <- manQlist_vn2[!is.na(manQlist_vn2)] %>% 
+  map(~data.frame(manQ = as.vector(.), 
+                  time = rep(1:ncol(.), each = nrow(.)),
+                  loc = rep(1:nrow(.), ncol(.)))) %>% 
+  bind_rows(.id = "case")
+
+
+Qdf_vn2 <- left_join(manQdf_vn2, trueQdf, by = c("time", "loc", "case"))
+```
+
+
+```{r}
+evalstatdf_vn2 <- Qdf_vn2 %>% 
+  glimpse() %>% 
+  group_by(case, loc) %>% 
+  summarize(RRMSE = RRMSE(pred = manQ, meas = trueQ),
+            NRMSE = NRMSE(pred = manQ, meas = trueQ),
+            rBIAS = rBIAS(pred = manQ, meas = trueQ),
+            NSE = NSE(pred = manQ, meas = trueQ)) %>% 
+  ungroup()
+
+rrmse_vn2_gg <- evalstatdf_vn2 %>% 
+  filter(!is.na(RRMSE)) %>% 
+  ggplot(aes(x = case, y = RRMSE)) + 
+  # geom_boxplot() +
+  coord_flip() +
+  geom_point(size = 0.5)
+rrmse_vn2_gg
+ggsave("../graphs/nplots/rrmse_variable_n_2.png")
+
+
+nrmse_vn2_gg <- evalstatdf_vn2 %>% 
+  filter(!is.na(NRMSE)) %>% 
+  ggplot(aes(x = case, y = NRMSE)) + 
+  # geom_boxplot() +
+  coord_flip() +
+  geom_point(size = 0.5) +
+  theme_bw() +
+  xlab("")
+nrmse_vn2_gg
+ggsave("../graphs/nplots/nrmse_variable_n_2.png")
+```
+
+Finally, the boxplots.
+
+```{r}
+evalstatdf_g <- evalstatdf %>%
+  gather(key = stat, value = value, -case, -loc)
+evalstatdf_vn_g <- evalstatdf_vn %>%
+  gather(key = stat, value = value, -case, -loc)
+evalstatdf_vn2_g <- evalstatdf_vn2 %>%
+  gather(key = stat, value = value, -case, -loc)
+
+
+allstats_both_gg <- left_join(evalstatdf_g, evalstatdf_vn_g, 
+                            by = c("case", "loc", "stat")) %>%
+  rename(constant = value.x, variable1 = value.y) %>% 
+  left_join(evalstatdf_vn2_g, by = c("case", "loc", "stat")) %>% 
+  rename(variable2 = value) %>% 
+  gather(key = n_treatment, value = value, -case, -loc, -stat) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = stat, y = value)) +
+  geom_boxplot(aes(fill = n_treatment)) + 
+  theme_bw()
+allstats_both_gg
+ggsave("../graphs/nplots/allstats_boxplot3.png")
+```
+
+### ANOVA on logn--linear models
+
+```{r}
+anovalm1 <- reachdata$Ganges %>% 
+  swot_tidy() %>% 
+  glimpse() %>% 
+  mutate(D = A / W, N = W^(-2/3) * A^(5/3) * S^(1/2) / Q, 
+         locfac = as.factor(loc), logn = log(N), logd = log(D)) %>% 
+  glimpse() %>% 
+  lm(data = ., formula = logn ~ locfac * logd)
+
+summary(anovalm1)
+
+foo <- tidy(anova(anovalm1))
+```
+
+Whip up a function. 
+
+```{r}
+swot_n_anova_lm <- function(swotlist) {
+  anovalm <- swotlist %>% 
+  swot_tidy() %>% 
+  mutate(D = A / W, N = W^(-2/3) * A^(5/3) * S^(1/2) / Q, 
+         locfac = as.factor(loc), logn = log(N), logd = log(D)) %>% 
+  lm(data = ., formula = logn ~ locfac * logd)
+  anovalm
+}
+
+swot_n_anova <- function(swotlist) {
+  out <- broom::tidy(anova(swot_n_anova_lm(swotlist)))
+  out
+}
+```
+
+Now do them all and look at meansq distributions.
+
+```{r}
+
+anovadf <- map(reachdata, possibly(swot_n_anova, otherwise = NA)) %>% 
+  (function(x) x[!is.na(x)]) %>% 
+  bind_rows(.id = "case") %>% 
+  group_by(case) %>% 
+  # mutate(pctTotVar = meansq / sum(meansq) * 100) %>% # Old, wrong version
+  mutate(pctTotVar = sumsq / sum(sumsq) * 100) %>% # Correct version
+  # mutate(pctTotVar = sumsq / length(sumsq)) %>%  # scaled to compare across locations
+  ungroup() %>% 
+  mutate(term = as.character(term),
+         term  = plyr::mapvalues(term, 
+                                from = c("locfac", "locfac:logd", "logd"),
+                                to = c("location", "location:depth", "depth")))
+
+anova_gg <- anovadf %>% 
+  filter(case != "Tanana") %>% 
+  ggplot(aes(x = term, color = case, y = pctTotVar)) +
+  geom_point() + 
+  geom_line(aes(group = case)) +
+  # scale_y_log10() +
+  theme_bw() +
+  ylab("Percent of total variance explained")
+
+ggplotly(anova_gg)
+# ggsave("../graphs/nplots/n_anova.png")
+
+```
+
+
+There appears to be an outlier in Platte location 12. 
+
+```{r}
+platte_tidy <- swot_tidy(reachdata$Platte)
+  
+platte_tidy %>% 
+  glimpse() %>% 
+  filter(loc == 12) %>%
+  mutate(Qhat = W^(-2/3) * A^(5/3) * S^(1/2), 
+         logn = log(Qhat / Q), 
+         logd = log(A / W)) %>% 
+  # filter(logd == min(logd))
+  ggplot(aes(x = Qhat, y = Q)) + 
+  geom_point(aes(color = time == 1)) +
+  scale_y_log10() +
+  scale_x_log10()
+```
+
+OK, that's fixed. 
+
+Also, I can't wrap my head around the ANOVA for MS DS. It says the MSE for residuals is near zero, yet the models doen't look all that good. 
+
+```{r}
+foo <- swot_n_anova_lm(swotlist = reachdata$MississippiDownstream)
+summary(foo)
+
+anova(foo)
+
+markstats::MSE(foo)
+markstats::R2(foo)
+var(foo$model[, 1])
+
+
+
+```
+
+Right, I should be lookin at sum of squares, not mean square. 
+
+- sum is conserved, mean is not. 
+
+```{r}
+foo <- swot_tidy(reachdata$Tanana)
+glimpse(foo)
+summary(foo)
+```
+

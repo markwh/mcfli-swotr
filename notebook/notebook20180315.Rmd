@@ -1,0 +1,400 @@
+---
+title: "notebook20180315"
+author: "Mark Hagemann"
+date: "March 15, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Today:
+
+- Chase this idea of using matrix properties to determine if we can infer A0. 
+- Design and build out interactive checks on:
+    - Manning
+    - Mass conservation
+    - other A0 inference assumptions (more direct--in 3/5 space)
+    
+    
+As per handwritten work, condition number seems like a reasonable thing to check for A0 inference. 
+
+```{r}
+condNo <- function(mat) {
+  eigvals <- eigen(mat)[["values"]]
+  out <- abs(eigvals[1]) / abs(eigvals[length(eigvals)])
+  out
+}
+
+lmCondNo <- function(mod) {
+  cormat <- cor(mod$model[, -1])
+  out <- condNo(cormat)
+  out
+}
+
+map_dbl(A0lms, lmCondNo) %>% 
+  sort()
+```
+
+
+Found a paper (Tamura et al., 2016) discussing variable subset methods for reducing collinearity. 
+
+It seems there may be a tradeoff between eliminating (Manning) model and measurement error and eliminating collinearity. The former would require more locations, the latter would require fewer. 
+
+OK, reading intro to paper, the approach is pretty straightforward. 
+
+1. Calculate condition number of full model
+2. For i in 1:(number of locations):
+    - remove location i
+    - Calculate condition number of model without location i
+    - Remember this value
+3. New model is model from part 2 with smallest condition number
+4. Return to step 2 using new model.
+5. Repeat the above until some threshold is reached--either condition number floor or location number floor. 
+
+Easy. Test this out on one of the A0lms. 
+
+```{r}
+testcase <- reachdata$Kanawha
+
+# modmat <- testlm$model[, -1]
+modmat <- with(testcase, na.omit(t((W^(-2/3) * S^(1/2))^(3/5))))
+nlocs <- ncol(modmat)
+
+elims <- numeric(0)
+condnos <- condNo(cor(modmat))
+for (i in 1:nlocs) {
+  nlocs_remain <- nlocs - i + 1
+  if (nlocs_remain <= 2) break
+  condnos_i <- map_dbl(1:nlocs_remain, ~condNo(cor(modmat[, -.])))
+  elim_i <- which.min(condnos_i)
+  
+  modmat <- modmat[, -elim_i]
+  
+  elims <- c(elims, elim_i)
+  condnos <- c(condnos, condNo(cor(modmat)))
+
+}
+```
+
+I need to think about whether this is affected by weight matrix / vector. 
+
+- Yes, of course it is. Really I should investigate correlation structure of WS matrix in 3/5 space. 
+- OK, modified the above accordingly. 
+
+```{r}
+ws35 <- map(reachdata, function(x) t(x$W^(-2/3) * x$S^(1/2))^(3/5))
+
+pairs(ws35$Connecticut)
+pairs(ws35$Severn[-1, ])
+
+which.max(ws35$Severn[, 4])
+```
+
+Spin-up issue in Severn. NEED TO FIX THIS. I should build a shiny app for visualizing Pepsi cases. 
+
+But first, finish characterizing condition numbers.
+
+```{r}
+recondition <- function(modmat) {
+  nlocs <- ncol(modmat)
+  
+  elims <- numeric(0)
+  remains <- 1:nlocs
+  condnos <- condNo(cor(modmat))
+  for (i in 1:nlocs) {
+    nlocs_remain <- nlocs - i + 1
+    if (nlocs_remain <= 2) break
+    condnos_i <- map_dbl(1:nlocs_remain, ~condNo(cor(modmat[, -.])))
+    elim_i <- remains[which.min(condnos_i)]
+    
+    remains <- remains[-which.min(condnos_i)]
+    modmat <- modmat[, -which.min(condnos_i)]
+    
+    elims <- c(elims, elim_i)
+    condnos <- c(condnos, condNo(cor(modmat)))
+  
+  }
+  
+  out <- data.frame(elim = c(NA_integer_, elims),
+                    n_elim = 0:length(elims),
+                    condno = condnos)
+  out
+}
+
+recres <- recondition(ws35$Po)
+plot(recres$condno)
+
+pairs(ws35$Po[, -recres$elim[2:13]])
+
+condNo(cor(ws35$Po[, -recres$elim[2:8]]))
+condNo(cor(ws35$Po[, -recres$elim[2:3]]))
+```
+
+That seems to work. Ready to put it into action?
+
+- That would require setting a threshold either on condition number or number of locations. 
+- Start with individual cases, showing A0 inversion as funciton of number of locations remaining when pruning this way. Alternatively, as function of condition number. 
+
+```{r}
+testcase <- "GaronneUpstream"
+rmtimes <- apply(ws35[[testcase]], 2, function(x) which(is.na(x))) %>% 
+  unlist() %>% 
+  unique()
+if (length(rmtimes) == 0)
+  rmtimes <- -(1:nrow(ws35[[testcase]]))
+
+recres <- recondition(ws35[[testcase]][-rmtimes, ])
+rmlocs <- c(list(NA), Reduce(c, recres$elims, accumulate = TRUE))
+# keeplocs <- map(rmlocs, function(x) (1:ncol(ws35[[testcase]]))[-x])
+
+estA0_sset <- function(rmlocs = NA, rmtimes = NA, lst) {
+  # browser()
+  force(rmlocs)
+  force(rmtimes)
+  
+  if (length(rmtimes) == 1L && is.na(rmtimes))
+    rmtimes <- -(1:ncol(lst$W))
+  
+  if (length(rmlocs) == 1L && is.na(rmlocs))
+    rmlocs <- -(1:nrow(lst$W))
+  
+  # print(map_int(lst, ~nrow(.[-rmlocs, -rmtimes])))
+  estA0(wmat = lst$W[-rmlocs, -rmtimes], 
+        smat = lst$S[-rmlocs, -rmtimes], 
+        damat = lst$dA[-rmlocs, -rmtimes])
+}
+  
+
+A0list <- rmlocs %>% 
+  map(~estA0_sset(rmlocs = ., rmtimes = rmtimes, 
+                  lst = reachdata[[testcase]])) %>% 
+  map(coef)
+
+putInCoefs <- function(coefs, rmlocs) {
+  if (length(rmlocs) == 1L && is.na(rmlocs)) {
+    rmlocs <- -(1:length(coefs))
+  }
+  starter <- rep(NA_real_, ncol(ws35[[testcase]]))
+  starter[-rmlocs] <- coefs
+  starter
+}
+
+realA0 <- with(reachdata[[testcase]], A - dA)[, 1] %>% 
+  data.frame(location = 1:length(.), A0_real = .)
+condnodf <- data.frame(nremoved = (1:length(recres$condno)) - 1, 
+                       condno = recres$condno)
+
+resdf <- map2(A0list, rmlocs, putInCoefs) %>% 
+  as.data.frame() %>% 
+  setNames((1:length(A0list)) - 1) %>% 
+  mutate(location = 1:nrow(.)) %>% 
+  gather(key = "nremoved", value = "A0_est", -location) %>% 
+  left_join(realA0, by = "location") %>% 
+  mutate(A0_err = (A0_est - A0_real) / A0_real, 
+         nremoved = as.numeric(nremoved)) %>% 
+  left_join(condnodf, by = "nremoved")
+
+ggplot(resdf, aes(x = nremoved, y = A0_err)) +
+  geom_point()
+
+ggplot(resdf, aes(x = condno, y = A0_err)) +
+  geom_point()
+
+```
+
+
+Make a function. 
+
+```{r}
+
+obslist <- reachdata$Seine
+
+estA0_prune_condno <- function(obslist) {
+  
+  wmat <- obslist$W
+  smat <- obslist$S
+  amat <- obslist$A
+  dAmat <- obslist$dA
+  
+  ws35 <- t(wmat ^ (-2/3) * smat ^ (1/2)) ^ (3/5)
+  recres <- recondition(ws35)
+  
+  rmlocs <- Reduce(c, recres$elim[-1], accumulate = TRUE)
+  keeplocs <- c(list("all"), map(rmlocs, `-`))
+  
+  A0lms <- map(keeplocs, ~estA0_list(obslist = obslist, keeplocs = .))
+  lmpreds <- map(A0lms, predict)
+  lmyobs <- map(A0lms, ~.$model[, 1])
+  
+  A0r2 <- map2_dbl(lmyobs, lmpreds,
+               function(x, y) 1 - sum((x - y)^2)/sum((x - mean(x))^2)) %>%
+    data.frame(n_elim = (1:length(.) - 1), R2 = .)
+  # A0r2 <- map_dbl(A0lms, markstats::Q2) %>% 
+  #   data.frame(n_elim = (1:length(.) - 1), R2 = .)
+  
+  
+  allocs <- 1:nrow(wmat)
+  coeflocs <- c(list(allocs), map(rmlocs, ~allocs[-.]))
+  A0ests <- map2(A0lms, coeflocs, function(x, y) setNames(coef(x), y)) %>% 
+    map(~data.frame(loc = names(.), A0_est = .)) %>% 
+    setNames(0:(length(.) - 1)) %>% 
+    bind_rows(.id = "n_elim") %>% 
+    mutate(n_elim = as.integer(n_elim), 
+           loc = as.integer(loc))
+  
+  out <- left_join(A0ests, recres, by = "n_elim") %>% 
+    left_join(A0r2, by = "n_elim") %>% 
+    select(loc, condno, R2, elim, n_elim, A0_est)
+  
+  if (!is.null(amat)) {
+    A0reals <- data.frame(loc = 1:nrow(wmat), A0_real = (amat - dAmat)[, 1])
+    out <- out %>% 
+      left_join(A0reals, by = "loc")
+  }
+  
+  out
+}
+
+estA0_prune_condno(reachdata$Ganges)
+```
+
+Now I can do the whole lot!
+
+```{r}
+omitnas <- function(obslist) {
+  obsnas <- map(obslist, ~which(is.na(.), arr.ind = TRUE)) %>% 
+    map(as.data.frame) %>% 
+    bind_rows()
+  rmthese <- unique(obsnas$col)
+  if(length(rmthese) == 0L)
+    return(obslist)
+  out <- map(obslist, ~.[, -rmthese])
+  out
+}
+
+foo <- reachdata %>% 
+  map(omitnas) %>% 
+  map(possibly(estA0_prune_condno, otherwise = NA))
+
+foodf <- foo %>% 
+  bind_rows(.id = "case") %>% 
+  mutate(A0_relerr = abs((A0_est - A0_real) / A0_real)) %>% 
+  group_by(case, n_elim) %>% 
+  mutate(medianerr = median(A0_relerr))
+
+ggplot(foodf, aes(x = R2, y = A0_relerr, color = case)) +
+  geom_point() +
+  geom_line(aes(y = medianerr, group = case))
+
+ggplot(foodf, aes(x = condno, y = A0_relerr, color = case)) +
+  geom_point() +
+  geom_line(aes(y = medianerr, group = case)) +
+  scale_x_log10()
+
+
+foolm <- lm(A0_relerr ~ R2 + log(condno), data = foodf)
+
+```
+
+
+Now a prune function for R2. 
+
+```{r}
+obslist <- reachdata$Connecticut
+estA0_prune_R2 <- function(obslist) {
+  
+  wmat <- obslist$W
+  smat <- obslist$S
+  amat <- obslist$A
+  dAmat <- obslist$dA
+
+  fullm <- estA0_list(obslist = obslist)
+    
+  nlocs <- nrow(obslist$W)
+  
+  myR2 <- function(model) {
+    markstats::R2(model$model[, 1], predict(model))
+  }
+  
+  locs_remain <- 1:nlocs
+  r2s <- myR2(fullm)
+  elims <- NA
+  coefs <- list(setNames(coef(fullm), 1:nlocs))
+  for (i in 1:nlocs) {
+    
+    print(sprintf("iteration %s of %s ", i, nlocs - 1))
+    
+    nlocs_remain <- nlocs - i + 1
+    if (nlocs_remain <= 2) 
+        break
+    
+    A0lms_i <- map(1:length(locs_remain), ~estA0_list(obslist, keeplocs = locs_remain[-.]))
+    
+    r2_i <- map_dbl(A0lms_i, myR2)
+    elimind <- which.max(r2_i)
+    elim_i <- locs_remain[elimind]
+    locs_remain <- locs_remain[-elimind]
+    coefs_i <- setNames(coef(A0lms_i[[elimind]]), locs_remain)
+    
+    elims <- c(elims, elim_i)
+    r2s <- c(r2s, max(r2_i))
+    coefs <- c(coefs, list(coefs_i))
+    
+  }
+  
+  coefdf <- coefs %>% 
+    map(~data.frame(loc = names(.), A0_est = .)) %>% 
+    setNames((1:length(coefs)) - 1) %>% 
+    bind_rows(.id = "nremoved") %>% 
+    mutate(nremoved = as.integer(nremoved), 
+           loc = as.integer(loc))
+  r2df <- data.frame(nremoved = (1:length(coefs)) - 1,
+                     R2 = r2s, elim = elims)
+  
+  Arealdf <- data.frame(loc = 1:nlocs, A0_real = (amat - dAmat)[, 1])
+  
+  out <- left_join(coefdf, r2df, by = "nremoved") %>% 
+    left_join(Arealdf, by = "loc")
+  
+  out
+}
+
+
+out <- estA0_prune_R2(reachdata$Ganges)
+out %>% 
+  mutate(relerr = (A0_est - A0_real) / A0_real) %>% 
+  ggplot(aes(x = R2, y = relerr)) +
+  geom_point()
+
+
+```
+
+Now do them all!
+
+```{r}
+
+bar <- reachdata %>% 
+  map(omitnas) %>% 
+  map(possibly(estA0_prune_R2, otherwise = NA))
+
+bardf <- bar[!is.na(bar)] %>% 
+  bind_rows(.id = "case") %>% 
+  mutate(A0_relerr = (A0_est - A0_real) / A0_real) %>% 
+  group_by(case, nremoved) %>% 
+  mutate(medianerr = median(A0_relerr))
+
+ggplot(bardf, aes(x = R2, y = abs(A0_relerr), color = case)) +
+  geom_point() +
+  geom_line(aes(y = abs(medianerr), group = case))
+  scale_x_log10()
+
+bardf %>% 
+  group_by(case, nremoved) %>% 
+  mutate(n = n()) %>% 
+  ggplot(aes(x = n, y = A0_relerr, color = case)) + 
+  geom_point() +
+  geom_line(aes(y= medianerr, group = case))
+```
+

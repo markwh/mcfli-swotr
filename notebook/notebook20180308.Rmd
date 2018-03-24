@@ -1,0 +1,373 @@
+---
+title: "notebook20180308"
+author: "Mark Hagemann"
+date: "March 8, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+setwd("../")
+library(ProjectTemplate)
+load.project()
+```
+
+
+Today I'm investigating the Durand 2010 method of bathymetry inference using the Pepsi 1 datasets. 
+
+```{r}
+library(swotData)
+
+pep1cases <- names(Pepsi_v2)
+pep1ncs <- sprintf("../../swotData/data/NC_files/%s.nc", pep1cases)
+
+nclists <- map(pep1ncs, nc_list) %>% 
+  setNames(pep1cases)
+
+gdrchs <- map(nclists, ~.$River_Info.gdrch)
+
+reachparts <- paste0("Reach_Timeseries.", c("W", "S", "A"))
+
+reachdata0 <- nclists %>% 
+  map(~.[reachparts]) %>% 
+  map(setNames, c("W", "S", "A")) %>% 
+  map2(gdrchs, function(x, y) map(x, function(z) z[y, ]))
+
+reachncols <- map(reachdata0, ~ncol(.$A))
+
+reachA0 <- reachdata0 %>% 
+  map(~.$A) %>% 
+  map(apply, 1, median) %>% 
+  map2(reachncols, function(x, y) matrix(rep(x, y), ncol = y, byrow = FALSE))
+
+reachdA <- reachdata0 %>% 
+  map(~.$A) %>% 
+  map2(reachA0, function(x, y) x - y)
+
+reachdata <- map2(reachdata0, reachdA, function(x, y) {x$dA <- y; x})
+```
+
+That's all the datasets I need. Now make the lms.
+
+```{r}
+A0lms <- map(reachdata, possibly(function(x) estA0(x$W, x$S, x$dA), otherwise = NA)) %>% 
+  `[`(!is.na(.))
+
+mod1 <- A0lms$Seine$model
+summary(A0lms$Seine)
+pairs(sample_n(mod1, 1000))
+
+map_dbl(A0lms, ocv)
+map_dbl(A0lms, R2) %>% sort()
+
+summary(A0lms$Po)
+summary(A0lms$Wabash)
+
+preddfs <- map(A0lms, ~data.frame(pred = predict(.), real = .$model$y)) %>% 
+  map(sample_n, 1000) %>% 
+  bind_rows(.id = "case")
+
+preddfs %>% 
+  ggplot(aes(x = real, y = pred)) + 
+  geom_point() +
+  geom_abline(aes(slope = 1, intercept = 0)) +
+  facet_wrap(~case, scales = "free")
+  
+ggsave("../graphs/A0lm_fit.png")
+```
+
+Compare model $R^2$ to relative A0 prediction error. 
+
+```{r}
+myR2 <- function(mod) {
+  true <- mod$model$y
+  pred <- predict(mod)
+  out <- markstats::R2(true, pred)
+  out
+}
+
+lmR2s <- data.frame(case = names(A0lms), R2 = map_dbl(A0lms, myR2))
+A0preds <- map(A0lms, ~tibble(A0est = coef(.), segment = 1:length(A0est))) %>% 
+  bind_rows(.id = "case")
+
+A0actdf <- reachdata0 %>% 
+  map(~.$A) %>% 
+  map(apply, 1, median) %>% 
+  `[`(names(A0lms)) %>% 
+  map(~data.frame(segment = 1:length(.), A0act = .)) %>% 
+  bind_rows(.id = "case")
+
+glimpse(A0preds)
+
+A0comparedf <- left_join(A0preds, A0actdf, by = c("case", "segment")) %>% 
+  mutate(relerr = (A0act - A0est) / A0act)
+
+predR2df <- left_join(lmR2s, A0comparedf, by = "case")
+
+gg_A0 <- predR2df %>% 
+  glimpse() %>% 
+  ggplot(aes(x = R2, y = abs(relerr), color = case)) +
+  geom_point()
+
+gg_A02 <- predR2df %>% 
+  ggplot(aes(x = case, y = abs(relerr), color = case)) +
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 90))
+
+
+# plotly::ggplotly(gg_A0)
+gg_A0
+ggsave("../graphs/A0_relerr_R2.png")
+
+gg_A02
+ggsave("../graphs/A0_relerr1.png")
+```
+
+Interesting, this is not much of a relationship at all! Possibly good for high R2, but I wouldn't hang my hat on that. 
+
+
+Cases to investigate:
+
+- Po (poor model fit but good predictions)
+- Connecticut (good model fit but bad predictions)
+
+```{r}
+A0lms$Po$model %>% 
+  sample_n(1000) %>% 
+  `[`(1:6) %>% 
+  pairs()
+
+A0lms$Connecticut$model %>% 
+  sample_n(1000) %>% 
+  pairs()
+
+A0lms$Ganges$model %>% 
+  sample_n(1000) %>% 
+  `[`(1:6) %>% 
+  pairs()
+```
+
+Actually, termplots show more.
+
+```{r}
+case1 <- "Connecticut"
+seg1 <- 3
+
+realA01 <- A0actdf %>% filter(case == case1, segment == seg1)
+
+ggTermPlot(A0lms[[case1]], xvar = paste0("x", seg1)) + 
+  geom_abline(aes(intercept = 0, slope = realA01$A0act), linetype = 2, color = "red")
+```
+
+
+
+Could investigate based on how well assumptions hold:
+
+- Mass conservation (steady-state)
+- Manning's equation
+
+```{r}
+Qmats <- nclists %>% 
+  map(~.$Reach_Timeseries.Q[.$River_Info.gdrch, ])
+
+Qmats %>% 
+  # map(~apply(log(.), 2, var)) %>%
+  map(~apply(.^(3/5), 2, var)) %>%
+  map_dbl(mean) %>% 
+  sort()
+
+
+```
+
+These all appear to be pretty well mass conserved (although there are other ways to check). Now check Manning's equation.
+
+```{r}
+case2 <- "Ganges"
+manq <- map(reachdata, ~with(., A^(5/3) * W^(-2/3) * S^(1/2)))
+
+plot(as.vector(manq[[case2]])^(3/5), as.vector(Qmats[[case2]])^(3/5))
+```
+
+
+I really want to know what's going on in Connecticut and similar. It would seem that the the model is really:
+
+$$
+\mathbf{X \Omega} (\beta) = (-\delta \mathbf{A} \circ \mathbf{X}) \omega
+$$
+
+where $\beta = c \mathbf{a}_0$ and $c$ is a constant. 
+
+- Now find out the value of $c$ in Connecticut.
+
+```{r}
+A0actdf %>% filter(case == "Connecticut") %>% `[[`("A0act") / 
+  coef(A0lms$Connecticut)
+
+```
+
+Estimates are off by roughly a factor of 2. And not constant across locations. 
+
+There are only 3 locations in Connecticut. Does that have any impact?
+
+- Not really--look at Platte.
+
+```{r}
+A0actdf %>% filter(case == "Platte") %>% `[[`("A0act") / 
+  coef(A0lms$Platte)
+
+```
+
+Platte even has a noticeable intercept (based on termplot). I wonder what that's about. 
+
+
+Before I go further with that, look at R2 in Manning. 
+
+
+```{r}
+manR2fun <- function(xmat, ymat) {
+  xsplit <- split(xmat, 1:nrow(xmat))
+  ysplit <- split(ymat, 1:nrow(ymat))
+  
+  out <- map2_dbl(xsplit, ysplit, function(x, y) cor(x, y)^2)
+  out
+}
+
+manR2 <- map2_dbl(manq, Qmats, function(x, y) min(manR2fun(x, y), na.rm = TRUE))
+
+manR2 %>% sort()
+```
+
+So this looks to correspond more closely with A0lm R2. Not so surprising. 
+
+Leaving the mystery of Connecticut A0lm. Here is what we know:
+
+- Manning's holds just about perfectly.
+- Mass conservation holds. 
+- A0lm has good fit (R2 = 0.85)
+- A0 is overpredicted by roughly a factor of 2
+- Overprediction is similar (1.5 - 2.1) but not identical across the 3 reaches.
+
+Ideas:
+
+- Maybe something with model assumptions (collinearity in predictors?)
+    - plot(A0lms$Connecticut) doesn't turn up anything suspicious. 
+- Something wrong with my math?
+    - Looks fine after checking over
+- Even though Manning's looks to have a good fit, is there some other model with a better fit?
+
+```{r}
+testmandf <- with(reachdata$Connecticut, 
+                  data.frame(W = log(as.vector(W)), 
+                             S = log(as.vector(S)), 
+                             A = log(as.vector(A)), 
+                             q = log(as.vector(Qmats$Connecticut))))
+
+manlm1 <- lm(q ~ W + S + A, testmandf)
+manlm2 <- lm(q ~ A + S + W, testmandf)
+
+summary(manlm1)
+summary(manlm2)
+
+anova(manlm1)
+
+pairs(testmandf)
+```
+
+Perhaps this may be the answer? How close is the area coefficient in a model like the above to 5/3?
+
+Check. 
+
+```{r}
+manlmfun <- function(datalist, qmat) {
+  
+  mandf <- data.frame(w = log(as.vector(datalist$W)), 
+                      s = log(as.vector(datalist$S)), 
+                      a = log(as.vector(datalist$A)),
+                      q = log(as.vector(qmat)))
+  out <- lm(q ~ w + a + s, data = mandf)
+  out
+}
+
+
+manlms <- map2(reachdata, Qmats, possibly(manlmfun, otherwise = NA))
+
+Acoefs <- manlms[!is.na(manlms)] %>% 
+  map_dbl(~coef(.)["a"])
+
+sort(Acoefs)
+
+sort(abs(Acoefs - 5/3))
+
+```
+
+This may be it. Unfortunately it's hard to say for sure since so many cases were omitted from various parts of the analysis. I'll have to redo and be more deliberate. 
+
+No wait! Severn should be bad, by this account. Yet it's the best out there!
+
+Just to compare, what if I put in the empirical coefficients when doing A0 estimation. Need to modify function to allow this. 
+
+```{r}
+concoefs <- coef(manlms$Connecticut)
+with(reachdata$Connecticut, estA0(wmat = W, smat = S, damat = dA, 
+                                  wexp = concoefs["w"], sexp = concoefs["s"], aexp = concoefs["a"]))
+
+A0lms$Connecticut$coefficients
+```
+
+Actually worse! What the hell?!
+
+Is collinearity messing up the lm?
+
+```{r}
+testmandf <- with(reachdata$Connecticut, 
+                  data.frame(W = log(as.vector(W)), 
+                             S = log(as.vector(S)), 
+                             A = log(as.vector(A)), 
+                             q = log(as.vector(Qmats$Connecticut))))
+
+manlm2 <- lm(q ~ S + A, testmandf)
+
+mandf3 <- mutate(testmandf, resid2 = resid(manlm2))
+
+manlm3<- lm(resid2 ~ W, mandf3)
+
+summary(manlm3)
+
+plot(resid2 ~ W, mandf3)
+abline(4, -2/3) # Just to show what a -2/3 slope looks like. 
+```
+
+I may need to do the different cross-sections separately. 
+
+
+```{r}
+datalist <- reachdata$Connecticut
+qmat <- Qmats$Connecticut
+
+
+manlmfun <- function(datalist, qmat) {
+  allist <- c(datalist, list(Q = qmat))
+  reachlsts <- map(allist, log) %>% 
+    map(split, f = 1:nrow(qmat))
+  reachdfs <- reachdfs <- map(1:nrow(qmat), ~map(reachlsts, function(x) x[[.]])) %>% 
+    map(as.data.frame)
+  
+  mandfs <- map(reachdfs, ~lm(Q ~ W + A + S, data = .))
+  mandfs
+}
+
+```
+
+
+```{r}
+
+case <- "Connecticut"
+ggTermPlot(manlms[[case]], xvar = "w")
+ggsave(sprintf("../graphs/%s_termplot_w.png", case))
+ggTermPlot(manlms[[case]], xvar = "s")
+ggsave(sprintf("../graphs/%s_termplot_s.png", case))
+ggTermPlot(manlms[[case]], xvar = "a")
+ggsave(sprintf("../graphs/%s_termplot_a.png", case))
+```
+

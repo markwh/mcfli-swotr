@@ -1,0 +1,145 @@
+---
+title: "McFLI-SWOT-R ecosystem"
+author: "Mark Hagemann"
+date: "March 23, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The packages described in this document are intended to assist the inference of hydrologic quantities from SWOT-like observations. These packages include:
+
+- swotData: read/write SWOT-like data including Pepsi test cases
+- McMan
+    - Mass-conserved Manning equation fucntions
+    - A0 inference using Mass-conserved Manning
+- Lisfloodr
+    - i/o, possibly running, plotting, conversion to swotData, etc. 
+
+
+### SWOT-like data
+
+`swotdata` contain measurements of stream height, slope, width, and partial cross-sectional area. The may further contian discharge, (full) cross-sectional area, and other data or metadata. 
+
+### Data import functions
+
+- nc_list (swotData)
+- nc_reach (swotData)
+- nc_xs (swotData)
+
+
+### Data prep functions
+
+- calcdA_vec (swotData, improved in lib/estA0.R)
+- calcdA_mat (swotData, improved in lib/estA0.R)
+- calcslope (swotData)
+
+- swot_tidy (manningEval/lib/utils.R)
+- swot_untidy (manningEval/lib/utils.R)
+- swot_timelag (manningEval/lib/utils.R)
+- smart_timelag (TODO)
+- rezero_dA (manningEval/lib/utils.R)
+- swot_A (manningEval/lib/utils.R)
+
+
+### Inference functions
+
+- estA0, estA0_list (lib/estA0.R)
+- manning_qdot (manningEval/lib/utils.R)
+
+### Diagnostics functions
+
+- swot_n_anova_lm (manningEval/lib/anova.R)
+- swot_n_anova (manningEval/lib/anova.R)
+
+### Data plotting functions
+
+- plot_DAWG (swotData)
+- plot_swot (swotData)
+
+
+### Lisflood functions
+
+- read_lisProfile (lib/lisflood.R)
+
+
+## Example Analysis 1
+
+### Read in data 
+
+### Calculate SWOT variables
+
+dA
+
+### Plot, EDA
+
+### Deal with non-positive and/or missing values
+
+### Tidy and untidy
+
+### Add a time lag
+
+```{r}
+foo <- reachdata$Platte
+foolag <- ccf_lag(foo)
+```
+
+
+## Example analysis 2: doing some inference
+
+```{r}
+foolag$dA <- rezero_dA(foolag$dA, zero = "median")
+fooA0 <- estA0_list(foolag)
+summary(fooA0)
+```
+
+
+## Example analysis 3: validation using known discharge and area
+
+### Diagnose Manning equation performance
+
+SWOT-like data
+
+- Flow imbalance estimate
+
+```{r}
+# swot_dqdx(foolag)
+# swot_dqdx(foo)
+dqs_lagged <- reachdata %>% 
+  map(possibly(ccf_lag, otherwise = NA)) %>% 
+  map_dbl(possibly(swot_dqdx, otherwise = NA_real_))
+dqs_nolag <- reachdata %>% 
+  map_dbl(possibly(swot_dqdx, otherwise = NA_real_))
+
+plot(dqs_nolag - dqs_lagged)
+abline(h = 0)
+```
+
+
+
+- 3/5-space condition number
+    - stepwise regression
+- 3/5-space R^2
+    - stepwise regression
+
+SWOT+ data
+
+- Exact flow imbalance
+- Reach-scale R^2 in 3/5 space
+    - steady-state mass conserved and not
+- Manning partial residual plots
+- Manning equation R2 in log space
+- ANOVA on log n
+
+
+### Validate A0 inference
+
+- Straight-up A0 comparison
+
+```{r}
+
+```
+
+- Marginal influence on Q estimation

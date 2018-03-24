@@ -1,0 +1,518 @@
+---
+title: "notebook20180321"
+author: "Mark Hagemann"
+date: "March 21, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Working more with Lisflood output--see if I agree with what Mike showed.
+
+```{r}
+pnums <- list.files("../../A0_identifiability/lisflood/toy_1/results_constant/", 
+                       pattern = "\\.profile$", full.names = FALSE) %>% 
+  stringr::str_extract("[0-9]{4}")
+
+pnums
+
+profiles <- list.files("../../A0_identifiability/lisflood/toy_1/results_constant/", 
+                       pattern = "\\.profile$", full.names = TRUE) %>% 
+  map(read_lisProfile) %>% 
+  setNames(pnums) %>% 
+  bind_rows(.id = "profile") %>% 
+  mutate(time = as.numeric(profile)) %>% 
+  arrange(time, ChanX) %>% 
+  group_by(time) %>% 
+  mutate(Slope = - c(NA, diff(WaterElev)) / c(NA, diff(ChanX))) %>% 
+  ungroup()
+```
+
+That worked!
+
+```{r}
+profiles$time <- as.numeric(profiles$profile)
+
+glimpse(profiles)
+summary(profiles)
+
+profiles %>% 
+  # filter(ChanX == 100) %>% 
+  filter(time > 20) %>% 
+  ggplot(aes(x = time, y = Flow, color = ChanX, group = ChanX)) +
+  geom_line()
+
+profiles %>% 
+  # filter(ChanX == 100) %>% 
+  filter(time > 20) %>% 
+  group_by(time) %>% 
+  arrange(ChanX) %>%
+  mutate(Slope  = c(NA, diff(WaterElev)) / c(NA, diff(ChanX))) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = time, y = Slope, color = ChanX, group = ChanX)) +
+  geom_line()
+
+ggsave("slopePlot.png")
+
+
+profiles %>% 
+  # filter(ChanX == 100) %>% 
+  filter(time > 20) %>% 
+  ggplot(aes(x = time, y = WaterDepth, color = ChanX, group = ChanX)) +
+  geom_line()
+```
+
+Now split into reaches. Discard final 10 km.
+
+```{r}
+reaches <- profiles %>% 
+  mutate(reach = as.factor(floor(ChanX / 10000) + 1)) %>% 
+  glimpse() %>% 
+  group_by(reach, time) %>% 
+  summarize(x_start = min(ChanX), x_length = max(ChanX) - min(ChanX),
+            Width = median(Width), Slope = median(Slope, na.rm = TRUE), 
+            Height = median(WaterElev), Depth = median(WaterDepth),
+            Flow = median(Flow)) %>% 
+  ungroup()
+
+reaches %>% 
+  # filter(reach == 1) %>% 
+  # glimpse()
+  ggplot(aes(x = time, y = Slope, color = reach, group = reach)) +
+  geom_point()
+  geom_line()
+```
+
+
+I should only use the times that are actually at steady-state. That should be just before the perturbations. 
+
+See if I can check for steady-state via diff.
+
+```{r}
+
+mydiff <- function(x) c(NA, diff(x))
+
+reaches_ss <- reaches %>% 
+  group_by(reach) %>% 
+  mutate(ss = mydiff(Width) + mydiff(Slope) + mydiff(Height) + 
+           mydiff(Depth) + mydiff(Flow) == 0) %>% 
+  # glimpse() %>% 
+  ungroup()
+
+reaches_ss %>% 
+  filter(ss) %>% 
+  ggplot(aes(x = time, y = Slope, color = reach, group = reach)) +
+  geom_point()
+
+```
+
+I should rerun with longer intervals, but let's leave that as a todo for now. 
+
+```{r}
+ss_times <- reaches_ss %>% 
+  select(time, reach, ss) %>% 
+  group_by(time) %>% 
+  summarize(n_ss = sum(ss, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  filter(n_ss == 3) %>% 
+  glimpse()
+  
+glimpse(ss_times)
+```
+
+### Working with Mike's unsteady case output.
+
+```{r}
+pnums <- list.files("../../A0_identifiability/lisflood/toy_1/results_simple/", 
+                       pattern = "\\.profile$", full.names = FALSE) %>% 
+  stringr::str_extract("[0-9]{4}")
+
+pnums
+
+profiles <- list.files("../../A0_identifiability/lisflood/toy_1/results_simple/", 
+                       pattern = "\\.profile$", full.names = TRUE) %>% 
+  map(read_lisProfile) %>% 
+  setNames(pnums) %>% 
+  bind_rows(.id = "profile") %>% 
+  mutate(time = as.numeric(profile)) %>% 
+  arrange(time, ChanX) %>% 
+  group_by(time) %>% 
+  mutate(Slope = - c(NA, diff(WaterElev)) / c(NA, diff(ChanX))) %>% 
+  ungroup()
+```
+
+```{r}
+glimpse(profiles)
+```
+
+```{r}
+reaches <- profiles %>% 
+  filter(ChanX < 30000) %>% 
+  mutate(reach = as.factor(floor(ChanX / 10000) + 1)) %>% 
+  glimpse() %>% 
+  group_by(reach, time) %>% 
+  summarize(x_start = min(ChanX), x_length = max(ChanX) - min(ChanX),
+            Width = median(Width), Slope = median(Slope, na.rm = TRUE), 
+            Height = median(WaterElev), Depth = median(WaterDepth),
+            Flow = median(Flow)) %>% 
+  ungroup()
+
+reaches %>% 
+  # filter(reach == 1) %>% 
+  # glimpse()
+  ggplot(aes(x = time, y = Slope, color = reach, group = reach)) +
+  geom_point()
+  geom_line()
+```
+
+I think I should start around time 20. 
+
+```{r}
+source("../../manningEval/lib/utils.R")
+reaches2 <- reaches %>% 
+  filter(time > 20) %>% 
+  transmute(loc = as.numeric(reach), time, W = Width, 
+            S = Slope, H = Height, Q = Flow) %>% 
+  swot_untidy()
+reaches2$dA <- calcdA_mat(reaches2$W, reaches2$H)
+
+plot_DAWG(reaches2$dA)
+
+A0lm1 <- with(reaches2, estA0(wmat = W, smat = S, damat = dA))
+
+# A0lm1$model %>% 
+#   sample_n(1000) %>% 
+#   pairs()
+
+summary(A0lm1)
+```
+
+That's puzzling. I should probably start thinking about a full-on package for exploring Manning behavior. Is it any better for smaller reaches? Only in that the estimates are less strongly negative. 
+
+Go back to original 10-km reaches. 
+
+### Continuing 3/23
+
+Now I'm checking on flow imbalance effects using the same dataset.
+
+Need to compute wave velocity. Easiest to just estimate from hydrograph, or I could do some relationship with flow velocity given area. But that would require digging into bathymetry.
+
+```{r}
+reaches %>% 
+  ggplot(aes(x = time, y = Flow, color = reach, group = reach)) +
+  geom_point()
+
+reaches %>% 
+  group_by(reach) %>% 
+  mutate(tmax = which.max(Flow)) %>% 
+  ungroup() %>% 
+  mutate(time = time - (tmax - min(tmax))) %>% 
+  ggplot(aes(x = time, y = Depth, color = reach, group = reach)) +
+  geom_point()
+
+```
+
+Or could it be the fault of outliers?
+
+```{r}
+toestlist <- reaches %>% 
+  group_by(reach) %>% 
+  mutate(tmax = which.max(Flow)) %>% 
+  ungroup() %>% 
+  transmute(
+    # time = time,
+    time = time - (tmax - min(tmax)),
+            loc = as.numeric(reach), W = Width, S = Slope, H = Height,
+            Q = Flow) %>% glimpse() %>% 
+  filter(
+    !time %in% unique(time[Q < 40]),
+    time > 4,
+    time < 90) %>%
+  swot_untidy()
+toestlist$dA <- with(toestlist, calcdA_mat(w = W, h = H))
+
+A0est2 <- estA0_list(toestlist)
+summary(A0est2)
+```
+
+Doesn't seem to work so well. Give more thought to that R package. Quickly check Manning assumptions, and assumptions of A0 inference. 
+
+- Manning partial residuals
+- Mass conservation / steady-state
+- A0 estimation
+    - WS35 condition number
+    - Backwards stepwise regression by condition number, R2
+- Estimate deltaT for flow imbalance. 
+    - Estimate wave celerity using Qhat, A0 estimate, slope, v bounds, n = 0.03
+        - First pass: use average velocity 
+        
+```{r}
+
+
+manningV <- function(Amat, Wmat, Smat, n = 0.03) {
+  Amat^(2/3) * Wmat^(-2/3) * Smat^(1/2) / n
+}
+
+A0hat <- bamr:::estimate_logA0(toestlist$W) %>% exp()
+A0hat_mat <- matrix(rep(A0hat, ncol(toestlist$W)), nrow = nrow(toestlist$W))
+
+foo <- manningV(Amat = toestlist$dA + A0hat_mat, Wmat = toestlist$W, 
+                Smat = toestlist$S)
+plot_DAWG(foo)
+
+# Another way, using Q / A
+bar <- toestlist$Q / (toestlist$dA + A0hat_mat)
+plot_DAWG(bar) 
+```
+
+The two methods are not terribly different--perhaps 60%. 
+
+Now my question is whether I can use this to inform a search for best R2 by varying deltaT.
+
+4 ways to do it:
+
+- Single average wave celerity
+- location-dependent average wave celerity
+- time-dependent wave celerity
+- time and space-dependent wave celerity
+
+Start with the first one. 
+
+Actually, first show how R2 changes as a function of time adjustment. 
+
+- shift reaches 1, 2, 3 as:
+- 0, 0, 1
+- 0, 1, 1
+- 0, 1, 2
+- 0, 1, 3
+- 0, 2, 3
+- 0, 2, 4
+- 0, 2, 5
+- 0, 3, 5
+- 0, 3, 6
+
+```{r}
+
+vsym <- seq(0, 3, by = 1/3) # time per reach!
+
+te_lists <- list()
+ae_lists <- list()
+
+for (i in 1:length(vsym)) {
+  vsymi <- vsym[i]
+  
+  tedf <- reaches %>% 
+  transmute(
+    # time = time,
+    reach, 
+    tadj = round((as.numeric(reach) - 1) * vsymi),
+    time = time - tadj,
+            loc = as.numeric(reach), W = Width, S = Slope, H = Height,
+            Q = Flow) %>% glimpse() %>% 
+  filter(
+    !time %in% unique(time[Q < 40]),
+    time > 10,
+    time < 90)
+  
+  print(ggplot(tedf, aes(x = time, y = Q, color = reach, group = reach)) +
+    geom_point() +
+      ggtitle(paste0("v = ", vsymi)))
+  
+  te_lists[[i]] <- swot_untidy(tedf)
+  
+  te_lists[[i]]$dA <- with(te_lists[[i]], calcdA_mat(w = W, h = H))
+  
+  ae_lists[[i]] <- estA0_list(te_lists[[i]])
+}
+```
+
+Check these out!
+
+```{r}
+R2df <- ae_lists %>%
+  setNames(paste0(round(vsym, digits = 2))) %>%
+  # map(~tidy(summary(.))) %>%
+  map(glance) %>%
+  bind_rows(.id = "v") %>% 
+  transmute(v = as.numeric(v), R2 = adj.r.squared)
+  
+
+smrydf <- ae_lists %>%
+  setNames(paste0(round(vsym, digits = 2))) %>%
+  map(~tidy(summary(.))) %>%
+  # map(glance) %>%
+  bind_rows(.id = "v") %>% 
+  mutate(v = as.numeric(v))
+
+smrydf %>% 
+  left_join(R2df, by = "v") %>% glimpse() %>% 
+  ggplot(aes(x = R2, y = estimate)) +
+  geom_point()
+
+smrydf %>% 
+  left_join(R2df, by = "v") %>% glimpse() %>% 
+  ggplot(aes(x = v, y = R2)) +
+  geom_point()
+
+```
+
+How about I plot them by v.
+
+```{r}
+te_lists %>% 
+  map(swot_tidy) %>% 
+  setNames(vsym) %>% 
+  bind_rows(.id = "v") %>% 
+  mutate(loc = as.factor(loc)) %>% 
+  ggplot(aes(x = time, y = Q, color = loc, group = loc)) +
+  geom_point() + 
+  facet_wrap(~v, ncol = 2)
+```
+
+I'm noticing significantly different results for different runs of estA0. That means theat the random selections of Omega are affecting things. Time to switch to a deterministic generation of omega. 
+
+```{r}
+nrch <- 5
+
+make_omega <- function(n, p1, p2) {
+  stopifnot(p1 < p2 && p2 <= n && p1 >= 1)
+  out <- rep(0L, n)
+  out[p1] <- 1L
+  out[p2] <- -1L
+  out
+}
+
+make_omegas <- function(n) {
+  p1s <- as.list(1:(n - 1))
+  p2s <- map(p1s, function(x) (x + 1):n)
+  out <- map2(p1s, p2s, function(x, y) map(y, ~make_omega(n, x, .)))
+  unlist(out, recursive = FALSE)
+}
+
+make_omegas(6)
+```
+
+Cool, that's done. At some point, check whether this improves estimates on the Pepsi cases. Also, the design matrix will have (p^3 - p^2) / 2 rows. 
+
+```{r}
+
+x <- 1:20
+y <- (x^2 * (x - 1)) / 2
+
+plot(x, y)
+```
+
+That's actually not so bad. Nothing in the Pepsi case is that big. 
+
+### CCF for reaches
+
+There may also be a way to do the search for time lag using ccf.
+
+- What space to do this in? log?
+    - Only works for dA (and not A) in 3/5 space. 
+    - No wait, it's not conserved in that space.
+    - Do iterative a la EM?
+    
+    - Choose starting A0 estimates
+    - find lags that maximize ccf
+    - Re-estimate A0
+    - Redo lag selection
+    - Repeat until convergence
+    
+I mean, I could code that but no guarantee it would work. Fun exercise though!
+
+
+
+```{r}
+
+datalist <- reaches %>% 
+  transmute(loc = as.numeric(reach), 
+            time, W = Width, S = Slope, H = Height) %>% 
+  swot_untidy()
+datalist$dA <- with(datalist, calcdA_mat(w = W, h = H, zero = "minimum"))
+
+
+
+
+
+
+# initialize dl, the datalist that will be modified
+dl <- datalist
+
+load("../../manningEval/cache/reachdata.RData")
+dl <- reachdata$MississippiDownstream
+
+
+for(i in 1:100) {
+  # cat(i, "\n")
+  ntimes <- ncol(dl$W)
+  tomat <- function(x) {
+    matrix(rep(x, ntimes), ncol = ntimes)
+  }
+
+  W <- dl$W
+  S <- dl$S
+  dA <- rezero_dA(dl$dA, "minimum")
+  
+  # initialize A0
+  delta <- 10
+  A0 <- coef(estA0(W, S, dA + delta))
+  cat(A0, "\n")
+  
+  A0[A0 <= 0] <- min(W[W>0])
+  A <- dA + tomat(A0)
+  
+  logmanlist <- (W^(-2/3) * S^(1/2) * A^(5/3)) %>% 
+    t() %>% 
+    log() %>% 
+    as.data.frame()
+   
+  ccf(logmanlist$V1, logmanlist$V2)
+  ccs <- map(2:length(logmanlist), 
+             ~ccf(logmanlist$V1, logmanlist[[.]], plot = FALSE))
+  bestlags <- c(0L, map_int(ccs, ~as.integer(.$lag)[which.max(.$acf)]))
+  cat(bestlags, "\n")
+  
+  
+  if (sum(!bestlags == 0) == 0)
+    break
+  
+  dl <- swot_timelag(dl, bestlags)
+}
+```
+
+Well the deterministic A0 estimation fixed the issue with different A0 reference points giving different A0 estimates (it wasn't ever actually an issue at all).
+
+### Spitballing about package or at least functions
+
+Data functions (many I already have in utils.R or in swotData package):
+
+- deal with NAs TODO
+- (un)tidy
+- filter negatives / zeros
+
+
+
+Primary actions:
+
+- lag time to line up
+- estimate A0
+- Condition number of WS35 matrix
+- Stepwise A0 regressions
+    - R2
+    - condition number
+- lisflood conversion to swotdata
+- characterize steady-state/ flow imbalance
+
+
+If I have Q data
+
+- Manning n ANOVA
+- Flow imbalance (and how well it's approximated by SWOT data analysis)
+- Reach-scale partial Manning regression behavior (i.e. R^2) -- from 0312 notebook
+
+
+
+

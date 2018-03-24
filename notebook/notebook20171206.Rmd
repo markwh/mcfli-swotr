@@ -1,0 +1,852 @@
+---
+title: "notebook20171206"
+author: "Mark Hagemann"
+date: "December 6, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I have a lot on my plate today--need to get this AGU talk down! 
+
+First, look at the HydroSWOT area data and see how many dates, how long of date ranges are represented. This souldn't matter as much now that I have AR(1) structure built in. 
+
+```{r}
+train_full %>% 
+  group_by(xs) %>% 
+  summarize(mindate = min(Date), maxdate = max(Date), 
+            ndays = as.numeric(maxdate) - as.numeric(mindate)) %>% 
+  summary()
+```
+
+I could also come up with a way of determining effective sample size. This could be fun!
+
+```{r}
+x <- 1:99 / 100
+# plot(x, exp(x - 1))
+# plot(x, exp((1 - x^2) / 2))
+# plot(x, (exp(1 - x^2) - 1) / (1 - x^2))
+plot(x, (x^2 - 1) / (2 * log(x)))
+abline(0, 1)
+```
+
+I have the following, from [this blog post](https://www.johndcook.com/blog/2017/06/27/effective-sample-size-for-mcmc/):
+
+$$
+ESS = \frac{n}{1 + 2 \sum_{k = 1}^\infty \rho (k)}
+$$
+
+Since I'm assuming AR(1), this simplifies to:
+
+$$
+ESS = \frac{n}{1 + 2 \sum_{k = 1}^\infty \rho^{k}} = \frac{n}{1 + 2(\frac{\rho}{1 - \rho})} = \frac{n(1 - \rho)}{1 + \rho}
+$$
+
+
+In my case, $\rho$ is not fixed, since the time step is not fixed. So I will instead have a weighted sum:
+
+$$
+ESS = \sum_{j = 1}^n \frac{1 - \rho_j}{1 + \rho_j}
+$$
+where
+
+$$
+\rho_j = \phi^{d_j}
+$$
+
+and $d_j$ is the difference in time between points $j$ and $j - 1$. Since the first time point has infinite distance from its (nonexistant) previous point, we can further write:
+
+$$
+ESS = 1 + \sum_{j = 2}^n \frac{1 - \phi^{d_j}}{1 + \phi^{d_j}}
+$$
+Let's make an R function and apply this to my favorite test dataset. 
+
+```{r}
+ess <- function(distvec, phi = 0.96) {
+  out <- 1 + sum((1 - phi^distvec) / (1 + phi^distvec))
+  out
+}
+
+
+ess(diff(as.numeric(obsdates)))
+length(obsdates)
+```
+
+Neat, so effective sample size is 90.2, for 598 total samples. 
+
+Consider Pepsi data. There, $n = 365$, all lags are 1. 
+
+```{r}
+ess(rep(1, 365))
+```
+
+Not so good, eh?
+
+
+OK, moving on to more important things. 
+
+## MLE estimates for A0
+
+Show: AR(1) likelihood function with prior is better than:
+
+- Prior alone
+- AR(1) likelihood without prior
+- Normal likelihood with prior, no temporal AR structure.
+
+Demonstrate this on:
+
+- HydroSWOT test set
+- Pepsi data
+
+## Prior alone MAP for A0
+
+I already did this in src/prior.R. Cached as `logA0_pred`. But I'll need to redo this now that I've done more data filtering. OK, DONE.
+ 
+```{r}
+plot(test_smry$A0, exp(logA0_pred), log = "xy")
+abline(0, 1)
+```
+
+
+## AR(1) without prior
+
+I also did this already, notebook20171202.Rmd. Except I did it with train data, from which priors are obtained. So need to redo (plus priors are different now.)
+
+```{r}
+
+noprior_ar1 <- test_full %>% 
+  split(.$xs) %>% 
+  purrr::map(~logPost_ar1(datadf = data.frame(.$dA, .$Date)))
+
+starts <- test_full %>% 
+  group_by(xs) %>% 
+  summarize(logA0_start = log(-min(dA)) + 1) %>% 
+  split(.$xs) %>% 
+  purrr::map(~c(.$logA0_start, 0.2))
+
+starts[[1]]  
+
+mynlm <- function(x, y) nlm(f = x, p = y)
+
+# mle1_noprior <- map2(noprior_ar1, starts, nlm) %>%
+#   purrr::map(~.$estimate) %>%
+#   purrr::map(~as.data.frame(as.list(.))) %>%
+#   purrr::map(setNames, c("logA0", "sigma_logA")) %>%
+#   bind_rows(.id = "xs") %>% 
+#   mutate(xs = as.numeric(xs))
+
+# cache("mle1_noprior")
+
+mle1_noprior
+
+noprior_ar1_val <- test_smry %>% 
+  transmute(xs, logA0_real = log(A0))
+noprior_ar1_val %>% 
+  left_join(mle1_noprior, by = "xs") %>% 
+  glimpse() %>% 
+  plot(logA0 ~ logA0_real, .)
+  
+```
+
+
+## AR(1) with prior
+
+Need to redo test set priors.
+
+```{r}
+makeMlePriors <- function(smry) {
+  
+  logW_sd <- smry$logW_sd
+  logW_mean <- smry$logW_mean
+  
+  
+  sigma_logA_hat <- 0.348656 + 1.127923 * logW_sd - 0.025254 * logW_mean
+  sigma_logA_sd <- 0.1897
+  logA0_hat <- -1.42623 + 1.50033 * logW_mean - 0.20260 * logW_sd
+  logA0_sd <- 0.5083
+  
+  out <- list(logA0_hat = logA0_hat,
+              sigmalogA_hat = sigma_logA_hat,
+              sigmalogA_sd = sigma_logA_sd)
+}
+
+mlePriorList <- test_smry %>% 
+  split(.$xs) %>% 
+  purrr::map(makeMlePriors)
+# cache("mlePriorList")
+
+
+
+withprior_ar1 <- test_full %>% 
+  split(.$xs) %>% 
+  map2(mlePriorList, ~logPost_ar1(datadf = data.frame(.x$dA, .x$Date),
+                                 priors = .y))
+
+starts <- test_full %>% 
+  group_by(xs) %>% 
+  summarize(logA0_start = log(-min(dA)) + 1) %>% 
+  split(.$xs) %>% 
+  purrr::map(~c(.$logA0_start, 0.2))
+
+starts[[1]]  
+
+mynlm <- function(x, y) {
+  cat(".")
+  suppressWarnings(nlm(f = x, p = y))
+}
+
+mle1_withprior <- map2(withprior_ar1, starts, mynlm) %>%
+  purrr::map(~.$estimate) %>%
+  purrr::map(~as.data.frame(as.list(.))) %>%
+  purrr::map(setNames, c("logA0", "sigma_logA")) %>%
+  bind_rows(.id = "xs") %>%
+  mutate(xs = as.numeric(xs))
+
+mle1_withprior
+
+withprior_ar1_val <- test_smry %>% 
+  transmute(xs, logA0_real = log(A0))
+withprior_ar1_val %>% 
+  left_join(mle1_withprior, by = "xs") %>% 
+  glimpse() %>% 
+  plot(logA0 ~ logA0_real, .)
+abline(0, 1)
+  
+```
+
+Not clear how much better this is. 
+
+```{r}
+resid_prior <- logA0_pred - test_smry$logA0
+resid_ar1_noprior <- mle1_noprior$logA0 - test_smry$logA0
+resid_ar1_withprior <- mle1_withprior$logA0 - test_smry$logA0
+
+sd(resid_prior)
+sd(resid_ar1_noprior)
+sd(resid_ar1_withprior)
+```
+
+- Check effective sample sizes.
+    - and see results only for large ess. 
+- See how many improve vs not 
+
+Effective sample sizes
+
+```{r}
+test_ess <- test_full %>% 
+  split(.$xs) %>% 
+  purrr::map(~data.frame(ess = ess(distvec = diff(as.numeric(.$Date))))) %>% 
+  bind_rows(.id = "xs")
+
+test_ess %>% summary()
+
+```
+
+So not very large, but still shouldn't be responsible for the results I'm getting. 
+
+It's possible I should be doing this all with respect to mean(logA) rather than median(logA).
+
+Let's look at the improvement stats.
+
+```{r}
+sum(abs(resid_ar1_noprior) < abs(resid_prior))
+sum(abs(resid_ar1_noprior) > abs(resid_prior))
+sum(abs(resid_ar1_withprior) < abs(resid_prior))
+sum(abs(resid_ar1_withprior) > abs(resid_prior))
+
+311 / (311 + 266)
+```
+
+What's the median improvement in terms of abs(residual)?
+
+```{r}
+median(abs(resid_ar1_withprior) - abs(resid_prior))
+```
+
+Now plot by ess.
+
+```{r}
+test_smry %>% 
+  glimpse() %>% 
+  mutate(logA0_post = mle1_withprior$logA0,
+         ess = test_ess$ess) %>% 
+  # filter(ess > median(ess)) %>% 
+  mutate(ess_cut = cut_number(ess, n = 3)) %>% 
+  # ggplot(aes(x = logA0, y = logA0_post, color = ess_cut)) +
+  ggplot(aes(x = logA0, y = logA0_post, color = cut_number(logW_sd, 6))) +
+  geom_point()
+```
+
+
+
+Also make a tweenr animation going from prior to posterior!
+
+And inspect some of the particularly offensive cases. 
+
+```{r}
+test_smry_post <- test_smry %>% 
+  mutate(logA0_post = mle1_withprior$logA0,
+         resid_prior = resid_prior,
+         resid = logA0 - logA0_post,
+         ess = test_ess$ess)
+
+test_smry_post %>% 
+  # filter(logA_sd > 0.4) %>% 
+  glimpse() %>% 
+  select(resid, resid_prior) %>% 
+  gather(key = "variable", value = "value") %>% 
+  ggplot(aes(x = value, color = variable)) + 
+  geom_density()
+```
+
+Time for inspection.
+
+```{r}
+test_smry_post %>% 
+  arrange(desc(resid)) %>% 
+  glimpse() %>% 
+  transmute(xs = as.character(xs),
+            logA0, logA0_post, resid, resid_prior, ess)
+
+# plot(resid ~ resid_prior, test_smry_post)
+```
+
+```{r}
+test_full %>% 
+  filter(xs == 4165710) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = Date, y = q_m3s)) +
+  geom_point()
+
+test_full %>% 
+  filter(xs == 4165710) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = area_m2, y = q_m3s)) +
+  geom_point()
+
+test_full %>% 
+  filter(xs == 4165710) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = w_m, y = area_m2)) +
+  geom_point()
+```
+
+Clearly this dataset is junk, but that's really based on the joint relationships that I'm not using in retrieving A0.
+
+```{r}
+test_full %>% 
+  filter(xs == 4165710) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = log(area_m2))) +
+  geom_histogram()
+```
+
+```{r}
+test_full %>% 
+  filter(xs == 4165710) %>% 
+  `[[`("dA") %>% 
+  hist()
+```
+
+
+```{r}
+densfun <- function(x, params) {
+  # browser()
+  logmean <- params[1]
+  logsd <- params[2]
+  xadj <- x + exp(logmean)
+  out0 <- dlnorm(x = xadj, meanlog = logmean, sdlog = logsd)
+  out <- out0 / max(out0)
+  out
+}
+
+dA_worstxs <- test_full %>% 
+  filter(xs == 4165710) %>% 
+  `[[`("dA")
+obsdates_worstxs <- test_full %>% 
+  filter(xs == 4165710) %>% 
+  `[[`("Date")
+priors_worstxs <- 
+  mlePriorList[["4165710"]]
+
+llik_denshist(obs, logPost_ar1(datadf = data.frame(dA_worstxs, obsdates_worstxs), 
+                               priors = priors_worstxs),
+              densfun = densfun, p = c(7, 2))
+
+# Compare against truth
+truth_worstxs <- test_smry %>% 
+  filter(xs == 4165710) %>% 
+  glimpse()
+
+    
+llik_denshist(obs, logPost_ar1(datadf = data.frame(dA_worstxs, obsdates_worstxs), 
+                               priors = priors_worstxs),
+              densfun = densfun, p = c(7, 2)) +
+  stat_function(fun = densfun, args = list(params = c(truth_worstxs$logA0,
+                                                     truth_worstxs$logA_sd)))
+truth_worstxs$logA_sd
+```
+
+OK, but now look at resids in real space.
+
+```{r}
+test_smry_post %>% 
+  # glimpse()
+  mutate(logA0_prior = logA0 - resid_prior) %>% 
+  ggplot(aes(x = A0, y = exp(logA0_post))) +
+  geom_point() + 
+  geom_point(aes(y = exp(logA0_prior)), shape = 2) +
+  geom_segment(aes(xend = A0, yend = exp(logA0_prior))) +
+  geom_abline(slope = 1, intercept = 0) +
+  scale_y_log10() + scale_x_log10()
+```
+
+I think that looks darn good. Possible directions from here:
+
+- adjust weight on prior based on width variability
+- Put hard bounds on area based on assumed minimum, maximum depth
+
+I can make a map showing where the worst cases are!
+
+```{r}
+library(leaflet)
+
+lletdata <- test_smry_post %>% 
+  filter(resid > quantile(resid, 0.975)) %>% 
+  glimpse()
+
+pal1 <- colorNumeric(c("#000000", "#4488CC"), domain = NULL)
+
+leaflet(lletdata) %>% 
+  addTiles() %>% 
+  addCircleMarkers(~lon, ~lat, radius = ~resid, color = ~pal1(resid), popup = ~(paste0(xs)))
+```
+
+Well that's cool anyway. Possible these are all regulated rivers, but hard to tell based on this alone. 
+
+
+### Pepsi dataset
+
+Can I use the swotData package? I can try! Nah, better to use cached data from SWOT project
+
+```{r}
+load("../../SWOT/cache/nc_r.RData")
+
+str(nc_r, 1)
+
+nc_r$Connecticut %>% str()
+```
+
+Hmm, doesn't have the info I need. I'll try swotData after all.
+
+```{r}
+library(swotData)
+
+ncfiles <- list.files("../../SWOT/data/ncdata/", pattern = "\\.nc$", full.names = TRUE)
+nclists <- setNames(lapply(ncfiles, nc_list), 
+                    gsub("\\.nc$", "", basename(ncfiles)))
+str(nclists$Connecticut)
+nclists$Connecticut$XS_Timeseries.A
+1
+```
+
+
+Put this into a form that the MLE functions can use. Something similar to test_full and test_summary
+
+```{r}
+
+fmtPepCase <- function(pep, smry = FALSE) {
+  ats <- t(pep$XS_Timeseries.A) 
+  wts <- t(pep$XS_Timeseries.W)
+  qts <- t(pep$XS_Timeseries.Q)
+  dates <- as.Date(pep$XS_Timeseries.t, origin = "0000-01-01")
+  
+  nx <- ncol(ats)
+  
+  adf <- ats %>% 
+    as.data.frame() %>% 
+    setNames(1:nx) %>% 
+    cbind(Date = dates, .) %>% 
+    gather(key = "xs", value = "area_m2", -Date) 
+    
+  wdf <- wts %>% 
+    as.data.frame() %>% 
+    setNames(1:nx) %>% 
+    cbind(Date = dates, .) %>% 
+    gather(key = "xs", value = "width_m", -Date)
+  
+  qdf <- qts %>% 
+    as.data.frame() %>% 
+    setNames(1:nx) %>% 
+    cbind(Date = dates, .) %>% 
+    gather(key = "xs", value = "q_m3s", -Date)
+  
+
+  out <- adf %>% 
+    left_join(wdf, by = c("Date", "xs")) %>% 
+    left_join(qdf, by = c("Date", "xs")) %>% 
+    filter(area_m2 > 10, width_m > 10, q_m3s > 10) %>% 
+    group_by(xs) %>% 
+    mutate(A0 = median(area_m2), 
+           dA = area_m2 - A0,
+           sdlogA = sd(log(area_m2)),
+           n = n()) %>% 
+    ungroup()
+  # browser()
+  out <- out %>%
+    filter(n > 30, sdlogA > 0.01)
+  
+  if (smry) {
+    out <- out %>% 
+      group_by(xs) %>% 
+      summarize(logW_mean = mean(log(width_m)),
+                logW_sd = sd(log(width_m)),
+                A0 = mean(A0),
+                logA0 = log(mean(A0)),
+                logA_sd = sd(log(area_m2)),
+                logA0_mean = mean(log(area_m2)),
+                n = n()) %>% 
+      ungroup()
+  }
+  
+  out
+}
+
+
+pepsi_full <- nclists %>%
+  purrr::map(fmtPepCase) %>% 
+  bind_rows(.id = "river") %>% 
+  mutate(xs = paste0(as.numeric(as.factor(river)), 
+                     sprintf("%04d", as.numeric(xs))))
+
+pepsi_smry <- nclists %>% 
+  purrr::map(fmtPepCase, smry = TRUE) %>% 
+  bind_rows(.id = "river") %>% 
+  mutate(xs = paste0(as.numeric(as.factor(river)), 
+                     sprintf("%04d", as.numeric(xs))))
+
+```
+
+Now I'm ready! Do the same analysis from before.
+
+
+```{r}
+
+noprior_pep <- pepsi_full %>% 
+  split(.$xs) %>% 
+  purrr::map(~logPost_ar1(datadf = data.frame(.$dA, .$Date)))
+
+starts_pep <- pepsi_full %>% 
+  group_by(xs) %>% 
+  summarize(logA0_start = log(-min(dA)) + 1) %>% 
+  split(.$xs) %>% 
+  purrr::map(~c(.$logA0_start, 0.2))
+
+starts_pep[[1]]  
+
+startsdf <- starts_pep %>% 
+  purrr::map(as.list) %>% 
+  purrr::map(setNames, c("logA0", "sdlogA")) %>% 
+  purrr::map(as.data.frame) %>% 
+  bind_rows(.id = "xs")
+
+
+
+mynlm <- function(x, y) {
+  cat(".")
+  suppressWarnings(nlm(f = x, p = y))
+}
+
+pepmle_noprior <- map2(noprior_pep[1:1000], starts_pep[1:1000], mynlm) %>%
+  purrr::map(~.$estimate) %>%
+  purrr::map(~as.data.frame(as.list(.))) %>%
+  purrr::map(setNames, c("logA0", "sigma_logA")) %>%
+  bind_rows(.id = "xs") %>%
+  mutate(xs = as.numeric(xs))
+
+pepmle_noprior
+
+noprior_pep_val <- pepsi_smry[1:1000, ] %>% 
+  transmute(xs, logA0_real = log(A0))
+noprior_pep_val %>% 
+  mutate(xs = as.numeric(xs)) %>% 
+  left_join(pepmle_noprior, by = "xs") %>% 
+  glimpse() %>% 
+  plot(logA0 ~ logA0_real, .)
+abline(0, 1)
+```
+
+Try with priors.
+
+```{r}
+pepsiPriorList <- pepsi_smry %>% 
+  split(.$xs) %>% 
+  purrr::map(makeMlePriors)
+
+withprior_pep <- pepsi_full %>% 
+  split(.$xs) %>% 
+  map2(pepsiPriorList, ~logPost_ar1(datadf = data.frame(.x$dA, .x$Date),
+                                 priors = .y))
+
+estinds <- 1:length(withprior_pep)
+
+pepmle_withprior <- map2(withprior_pep[estinds], starts_pep[estinds], mynlm) %>%
+  purrr::map(~.$estimate) %>%
+  purrr::map(~as.data.frame(as.list(.))) %>%
+  purrr::map(setNames, c("logA0", "sigma_logA")) %>%
+  bind_rows(.id = "xs") %>%
+  mutate(xs = as.numeric(xs)) %>% 
+  arrange(xs)
+
+pepmle_withprior
+pepmle_withprior %>% 
+  summary()
+
+withprior_pep_val <- pepsi_smry %>% 
+  transmute(river, xs = as.numeric(xs), 
+            logA0_real = log(A0), 
+            logW_sd, 
+            sigmalogA_real = logA_sd) %>%
+  arrange(xs)
+pep_ggdf1 <- withprior_pep_val %>% 
+  left_join(pepmle_withprior, by = "xs") %>% 
+  na.omit()
+
+summary(pep_ggdf1)
+
+ggplot(pep_ggdf1, aes(x = logA0_real, y = logA0)) + 
+  # geom_point(aes(color = river)) +
+  geom_point(aes(color = sigmalogA_real)) +
+  # geom_point(aes(color = logW_sd)) +
+  geom_abline(slope = 1, intercept = 0)
+
+
+```
+
+Can I do a fancy ggvis or something?
+
+```{r}
+library(crosstalk)
+library(d3scatter)
+shared_mtcars <- SharedData$new(mtcars)
+bscols(widths = c(3,NA,NA),
+  list(
+    filter_checkbox("cyl", "Cylinders", shared_mtcars, ~cyl, inline = TRUE),
+    filter_slider("hp", "Horsepower", shared_mtcars, ~hp, width = "100%"),
+    filter_select("auto", "Automatic", shared_mtcars, ~ifelse(am == 0, "Yes", "No"))
+  ),
+  d3scatter(shared_mtcars, ~wt, ~mpg, ~factor(cyl), width="100%", height=250),
+  d3scatter(shared_mtcars, ~hp, ~qsec, ~factor(cyl), width="100%", height=250)
+)
+
+shared_pepgg <- SharedData$new(pep_ggdf1)
+bscols(widths = c(3, NA),
+       list(
+         filter_checkbox("riv", "river", shared_pepgg, ~river, inline = TRUE),
+         filter_slider("sdlA", "sd(logA)", shared_pepgg, ~sigmalogA_real, width = "100%")
+       ),
+       d3scatter(shared_pepgg, ~logA0_real, ~logA0, ~factor(river), width = "100%", height = 250))
+```
+
+This is pleasing to me. But I don't trust the cross-section data. Look instead at reach data. 
+
+### Reach data
+
+
+```{r}
+
+fmtPepCase_reach <- function(pep, smry = FALSE) {
+  ats <- t(pep$Reach_Timeseries.A) 
+  wts <- t(pep$Reach_Timeseries.W)
+  qts <- t(pep$Reach_Timeseries.Q)
+  dates <- as.Date(pep$Reach_Timeseries.t, origin = "0000-01-01")
+  
+  nx <- ncol(ats)
+  
+  adf <- ats %>% 
+    as.data.frame() %>% 
+    setNames(1:nx) %>% 
+    cbind(Date = dates, .) %>% 
+    gather(key = "reach", value = "area_m2", -Date) 
+    
+  wdf <- wts %>% 
+    as.data.frame() %>% 
+    setNames(1:nx) %>% 
+    cbind(Date = dates, .) %>% 
+    gather(key = "reach", value = "width_m", -Date)
+  
+  qdf <- qts %>% 
+    as.data.frame() %>% 
+    setNames(1:nx) %>% 
+    cbind(Date = dates, .) %>% 
+    gather(key = "reach", value = "q_m3s", -Date)
+  
+
+  out <- adf %>% 
+    left_join(wdf, by = c("Date", "reach")) %>% 
+    left_join(qdf, by = c("Date", "reach")) %>% 
+    filter(area_m2 > 10, width_m > 10, q_m3s > 10) %>% 
+    group_by(reach) %>% 
+    mutate(A0 = median(area_m2), 
+           dA = area_m2 - A0,
+           sdlogA = sd(log(area_m2)),
+           n = n()) %>% 
+    ungroup()
+  # browser()
+  out <- out %>%
+    filter(n > 30, sdlogA > 0.01)
+  
+  if (smry) {
+    out <- out %>% 
+      group_by(reach) %>% 
+      summarize(logW_mean = mean(log(width_m)),
+                logW_sd = sd(log(width_m)),
+                A0 = mean(A0),
+                logA0 = log(mean(A0)),
+                logA_sd = sd(log(area_m2)),
+                logA0_mean = mean(log(area_m2)),
+                n = n()) %>% 
+      ungroup()
+  }
+  
+  out
+}
+
+
+pepsi_full <- nclists %>%
+  purrr::map(fmtPepCase_reach) %>% 
+  bind_rows(.id = "river") %>% 
+  mutate(reach = paste0(as.numeric(as.factor(river)), 
+                     sprintf("%04d", as.numeric(reach))))
+
+pepsi_smry <- nclists %>% 
+  purrr::map(fmtPepCase_reach, smry = TRUE) %>% 
+  bind_rows(.id = "river") %>% 
+  mutate(reach = paste0(as.numeric(as.factor(river)), 
+                     sprintf("%04d", as.numeric(reach))))
+
+```
+
+Now I'm ready! Do the same analysis from before.
+
+
+```{r}
+
+noprior_pep <- pepsi_full %>% 
+  split(.$reach) %>% 
+  purrr::map(~logPost_ar1(datadf = data.frame(.$dA, .$Date)))
+
+starts_pep <- pepsi_full %>% 
+  group_by(reach) %>% 
+  summarize(logA0_start = log(-min(dA)) + 1) %>% 
+  split(.$reach) %>% 
+  purrr::map(~c(.$logA0_start, 0.2))
+
+starts_pep[[1]]  
+
+startsdf <- starts_pep %>% 
+  purrr::map(as.list) %>% 
+  purrr::map(setNames, c("logA0", "sdlogA")) %>% 
+  purrr::map(as.data.frame) %>% 
+  bind_rows(.id = "reach")
+
+
+
+mynlm <- function(x, y) {
+  cat(".")
+  suppressWarnings(nlm(f = x, p = y))
+}
+
+pepmle_noprior <- map2(noprior_pep, starts_pep, mynlm) %>%
+  purrr::map(~.$estimate) %>%
+  purrr::map(~as.data.frame(as.list(.))) %>%
+  purrr::map(setNames, c("logA0", "sigma_logA")) %>%
+  bind_rows(.id = "reach") %>%
+  mutate(reach = as.numeric(reach))
+
+pepmle_noprior
+
+noprior_pep_val <- pepsi_smry %>% 
+  transmute(reach, logA0_real = log(A0))
+noprior_pep_val %>% 
+  mutate(reach = as.numeric(reach)) %>% 
+  left_join(pepmle_noprior, by = "reach") %>% 
+  glimpse() %>% 
+  plot(logA0 ~ logA0_real, .)
+abline(0, 1)
+```
+
+Try with priors.
+
+```{r}
+pepsiPriorList <- pepsi_smry %>% 
+  split(.$reach) %>% 
+  purrr::map(makeMlePriors)
+
+withprior_pep <- pepsi_full %>% 
+  split(.$reach) %>% 
+  map2(pepsiPriorList, ~logPost_ar1(datadf = data.frame(.x$dA, .x$Date),
+                                 priors = .y))
+
+estinds <- 1:length(withprior_pep)
+
+pepmle_withprior <- map2(withprior_pep[estinds], starts_pep[estinds], mynlm) %>%
+  purrr::map(~.$estimate) %>%
+  purrr::map(~as.data.frame(as.list(.))) %>%
+  purrr::map(setNames, c("logA0", "sigma_logA")) %>%
+  bind_rows(.id = "reach") %>%
+  mutate(reach = as.numeric(reach)) %>% 
+  arrange(reach)
+
+pepmle_withprior
+pepmle_withprior %>% 
+  summary()
+
+withprior_pep_val <- pepsi_smry %>% 
+  transmute(river, reach = as.numeric(reach), 
+            logA0_real = log(A0), 
+            logW_sd, 
+            sigmalogA_real = logA_sd) %>%
+  arrange(reach)
+pep_ggdf1 <- withprior_pep_val %>% 
+  left_join(pepmle_withprior, by = "reach") %>% 
+  na.omit()
+
+summary(pep_ggdf1)
+
+ggplot(pep_ggdf1, aes(x = logA0_real, y = logA0)) + 
+  # geom_point(aes(color = river)) +
+  geom_point(aes(color = sigmalogA_real)) +
+  # geom_point(aes(color = logW_sd)) +
+  geom_abline(slope = 1, intercept = 0)
+
+
+```
+
+Can I do a fancy ggvis or something?
+
+```{r}
+library(crosstalk)
+library(d3scatter)
+shared_mtcars <- SharedData$new(mtcars)
+bscols(widths = c(3,NA,NA),
+  list(
+    filter_checkbox("cyl", "Cylinders", shared_mtcars, ~cyl, inline = TRUE),
+    filter_slider("hp", "Horsepower", shared_mtcars, ~hp, width = "100%"),
+    filter_select("auto", "Automatic", shared_mtcars, ~ifelse(am == 0, "Yes", "No"))
+  ),
+  d3scatter(shared_mtcars, ~wt, ~mpg, ~factor(cyl), width="100%", height=250),
+  d3scatter(shared_mtcars, ~hp, ~qsec, ~factor(cyl), width="100%", height=250)
+)
+
+shared_pepgg <- SharedData$new(pep_ggdf1)
+bscols(widths = c(3, NA),
+       list(
+         filter_checkbox("riv", "river", shared_pepgg, ~river, inline = TRUE),
+         filter_slider("sdlA", "sd(logA)", shared_pepgg, ~sigmalogA_real, width = "100%")
+       ),
+       d3scatter(shared_pepgg, ~logA0_real, ~logA0, ~factor(river), width = "100%", height = 350))
+```
+
