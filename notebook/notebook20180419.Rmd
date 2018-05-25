@@ -1,0 +1,195 @@
+---
+title: "notebook20180419"
+author: "Mark Hagemann"
+date: "April 19, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Since I can't get an intuitive or mathematical understanding of correlation and other error structure in uscase, pepsi cases, it's time to go ahead with the simulation / sensitivity analysis. 
+
+- split closure term into gamma, nu. 
+- Split gamma into constant dq/dx and other
+- split nu into time (depth) and space components
+- Any further decomposition?
+    - I still need to characterize this stuff!
+
+Also, swot_gamma needs to be changed to manning_gamma. In fact, I think it's time to put all the closure funcitons into lib/.
+
+```{r}
+casei <- uscase
+casei <- reachdata$MississippiDownstream
+
+gammai <- mannning_gamma(casei)
+
+plot_DAWG(gammai)
+
+dgi <- decomp_gamma(gammai, casei$x)
+
+plot_DAWG(dgi$gammahat)
+plot_DAWG(dgi$gammaerr)
+
+
+```
+
+Does nu calculation work via manning_ndot? Nope, that's just the space-vector of means. How about by manning_closure?
+
+```{r}
+nui <- manning_closure(casei, log = TRUE, mc = FALSE) %>% 
+  `-`(mean(.))
+
+plot_DAWG(nui)
+
+closi <- manning_closure(casei, log = TRUE, mc = TRUE)
+plot_DAWG(closi)
+plot_DAWG(closi - gammai)
+plot_DAWG(manning_nu(casei) %>% exp())
+
+dni <- decomp_nu(manning_nu(casei))
+
+plot_DAWG(dni$nuhat %>% exp())
+plot_DAWG(dni$nuerr %>% exp())
+
+plot(casei$A / casei$W, dni$nuerr)
+
+plot_DAWG(findif_x(dni$nuerr))
+
+cor(t(dni$nuerr))
+```
+
+There is correlation between these different tau timeseries, but I can't account for it. 
+
+```{r}
+val_nd_plot(casei)
+```
+
+Looking at what I have so far, I need to modify:
+
+- temporal variability of dgamma/dx - sigma_dgdx
+- spatial variability of nu - sigma_alpha
+- magnitude of residuals - sigma_epsilon
+
+Approach:
+
+- Specify magnitudes of errors described above
+- Decompose case into these components
+- Modify components accordingly 
+- Reassemble
+- estimate A0
+
+```{r}
+# Characterize
+characterize_closure <- function(swotlist) {
+  gma <- manning_gamma(swotlist)
+  gd <- decomp_gamma(gma, swotlist$x)
+  
+  sig_dgdx <- sd(gd$dgdx)
+  
+  nu <- manning_nu(swotlist)
+  nd <- decomp_nu(nu)
+  
+  sig_alpha <- sd(nd$nuhat[, 1])
+  sig_err <- sd(gd$gammaerr + nd$nuerr)
+  
+  out <- c(dgdx = sig_dgdx, alpha = sig_alpha, err = sig_err, 
+           dx = sd(swotlist$x[, 1]))
+  out
+}
+
+plot_DAWG(gd$gammaerr + nd$nuerr)
+plot_DAWG(nd$nuerr)
+plot_DAWG(gd$gammaerr)
+plot_DAWG(gd$gammahat)
+sd(gd$gammahat)
+```
+
+How do I relate sig_dgdx to sig_gammahat? Need mean of dgdx as well. But this is zero if dist'n is symmetric, and I'm modeling it as normal, so it's symmetric. 
+
+Anyway, the answer is it's the product of mean(dgdx^2) and mean(deltax^2). Show that it is. 
+
+```{r}
+mean(gd$dgdx^2) * mean((findif_x(casei$x)[, 1])^2)
+
+sd(gd$gammahat)^2
+
+mean(gd$gammahat^2)
+
+mean((swot_vec2mat(gd$dgdx, gd$gammahat) * 
+        swot_vec2mat(findif_x(casei$x)[, 1], gd$gammahat))^2)
+mean((swot_vec2mat(gd$dgdx, gd$gammahat) * 
+        swot_vec2mat(findif_x(casei$x)[, 1], gd$gammahat)))^2
+```
+
+
+Close, but not perfect.
+
+Bah, right. deltax isn't the same as finite difference. 
+
+
+```{r}
+xlocs <- casei$x[, 1]
+mean(gd$dgdx^2) * mean((xlocs - mean(xlocs))^2)
+```
+
+There it is. Good. Now finish characterie_closure function.
+
+```{r}
+characterize_closure(casei)
+```
+
+Now what? Do a test case where I modify these and recreate the case. 
+
+```{r}
+newdgdx <- 1.6e-5
+newalpha <- 4e-3
+newerr <- 2e-2
+
+modify_closure <- function(swotlist, sigma_dgdx, sigma_alpha, sigma_err) {
+  
+  ptrn <- swotlist$W
+  
+  xlocs <- swotlist$x[, 1]
+  xdevs <- xlocs - mean(xlocs)
+  xdevs_mat <- swot_vec2mat(xdevs, ptrn)
+  
+  nx <- nrow(ptrn)
+  nt <- ncol(ptrn)
+  
+  sim_dgdx <- rnorm(nt, 0, sigma_dgdx)
+  gammahat <- swot_vec2mat(sim_dgdx, ptrn) * xdevs_mat
+  
+  sim_alpha <- rnorm(nx, 0, sigma_alpha)
+  nuhat <- swot_vec2mat(sim_alpha, ptrn)
+  
+  sim_err <- rnorm(nx * nt, 0, sigma_err)
+  
+  out <- gammahat + nuhat + matrix(sim_err, nr = nx)
+  out
+}
+
+plot_DAWG(gammahat)
+
+
+newclosi <- modify_closure(casei, sigma_dgdx = newdgdx, 
+                        sigma_alpha = newalpha, sigma_err = newerr)
+
+
+```
+
+Now need to make something to go into estA0_linA_ws35.
+
+```{r}
+newWS35 <- manning_linA_closed(casei) * exp(newclosi)
+
+plot_DAWG(newWS35)
+
+estA0_lm_ws35(newWS35, dAmat = casei$dA)
+
+```
+
+I should express dgdx in a more intuitive unit. Like percent per reach. 
+
+

@@ -1,0 +1,58 @@
+---
+title: "notebook20180327"
+author: "Mark Hagemann"
+date: "March 27, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Already did some work at the end of yesterday's notebook. In short, my joint estimation of ndot and A0 is blowing up. Now I need to work on lisflood stuff in prep for meeting with Mike.
+
+Last time I did lisflood was 3/23 (Friday).
+
+- I now have a function to read in lisflood output as reaches, and convert to dawg (untidy) format.
+- A0 not good on unadjusted data
+- improves after adjusting via ccf.
+- Sensitive to time and reach subsetting
+- spatial variability also goes down after ccf lag
+- R2 improves after ccf lag
+
+I don't think I'll have time to rerun for longer steady-state conditions before the meeting, but:
+
+- Already did some work on this in 0321 notebook--pick up analysis here
+- In future, write function for generating lisflood boundary condition files
+
+
+Main things:
+
+- flow imbalance quantified
+    - Still need to contextualize with spatial and temporal sampling frequency
+- Inference pipeline outlined
+- Diagnostics and validations enumerated, coded up
+- Theoretically possible to jointly estimate ndot and A0 (iteratively), but it's blowing up--needs regularization
+
+Other stuff:
+
+- Deterministic omegas are the new thing
+    - Fix inconsistencies depending on where dA is zeroed. 
+- Restructuring all code, to be organized into a suite of R packages
+
+
+```{r}
+map_dbl(reachdata, possibly(swot_dqdx, otherwise = NA)) %>% 
+  sort()
+
+plot_DAWG(with(reachdata$Platte, manning_qdot(W, S, A)))
+```
+
+
+Now that the call is over, spend some time organizing funcitons. 
+
+
+- Put Manning validation in its own script? Give its own prefix?
+    - e.g. true_dqdx or val_dqdx vs. manning_dqdx
+    - or mv_dqdx vs. mm_dqdx

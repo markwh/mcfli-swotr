@@ -1,0 +1,35 @@
+---
+title: "notebook20180510"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Checking up on log-likelihood function for A0 from bam-like formulation. It's got to have downward concavity, but I can't get that to come out! Unless third term forces everything to be negative. Here's what I have:
+
+```{r}
+nll.. <- function(swotlist, reachno) {
+  dAi <- swotlist$dA[reachno, ]
+  xi <- 1/2 * log(swotlist$S[reachno, ]) - 2/3 * log(swotlist$W[reachno, ])
+  
+  outfun <- function(A0, logQn, sigma) {
+    Ai <- dAi + A0
+    mu <- logQn - 5/3 * log(Ai)
+    
+    term1 <- 5/(3 * sigma^2) * sum(1 / Ai)
+    term2 <- 5/3 * sum(1 / Ai^2)
+    term3 <- 5 / (3 * sigma^2) * sum((xi - mu) / Ai^2)
+    
+    out <- term1 + term2 + term3
+    out
+    }
+}
+
+nll1 <- nll..(reachdata$Po, 3)
+
+nll1(1400, 5, 1)
+```
+

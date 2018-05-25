@@ -170,7 +170,7 @@ reaches %>%
 I think I should start around time 20. 
 
 ```{r}
-source("../../manningEval/lib/utils.R")
+# source("../../manningEval/lib/utils.R")
 reaches2 <- reaches %>% 
   filter(time > 20) %>% 
   transmute(loc = as.numeric(reach), time, W = Width, 
@@ -441,7 +441,7 @@ datalist$dA <- with(datalist, calcdA_mat(w = W, h = H, zero = "minimum"))
 # initialize dl, the datalist that will be modified
 dl <- datalist
 
-load("../../manningEval/cache/reachdata.RData")
+# load("../../manningEval/cache/reachdata.RData")
 dl <- reachdata$MississippiDownstream
 
 

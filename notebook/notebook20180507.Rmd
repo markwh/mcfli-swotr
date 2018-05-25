@@ -1,0 +1,265 @@
+---
+title: "notebook20180507"
+author: "Mark Hagemann"
+date: "May 7, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I made a new stan model (A0_v3.stan) and a new math document (probabilisticModel.Rmd). Time to try it out!
+
+```{r}
+library(rstan)
+
+# modi <- stan_model("../stan/A0_v3.stan")
+# modi <- stan_model("../stan/A0_v3-1.stan")
+modi <- stan_model("../stan/A0_v2-1.stan")
+
+
+casei <- sscase
+
+characterize_closure(casei)
+
+
+
+stan_inpsi <- list(nt = ncol(casei$W),
+                   nx = nrow(casei$W),
+                   dA = t(casei$dA),
+                   W = t(casei$W),
+                   S = t(casei$S),
+                   x = casei$x[, 1], 
+                   
+                   logA0_hat = mean(bamr::estimate_logA0(casei$W)),
+                   # logA0_sd = 1,
+                   sigma_logA0 = 1,
+                   omega = make_omegas(n = nrow(casei$W)),
+                   
+                   sigma_dA = 1e-7,
+                   sigma_dgdx = 4.5e-9,
+                   sigma_nu = 1e-4,
+                   sigma_err = 1.4e-3)
+
+
+esti <- optimizing(modi, stan_inpsi, 
+                   # init = list(A0 = rep(100, 3), 
+                   #             dgdx = rep(0, 77),
+                   #             nu = rep(0, 77), 
+                   #             epsilon = rep(0, 77)),
+                   sample_file = "optimlog.txt")
+```
+
+Finally something works! (v2-1) See what vb does.
+
+```{r}
+vbi <- vb(modi, stan_inpsi)
+summary(vbi)
+plot(vbi)
+
+stan_inpsi$logA0_hat <- 4 # Something ridiculous. 
+
+sampi <- sampling(modi, stan_inpsi, cores = 3, chains = 3)
+summary(sampi)
+
+stan_trace(sampi, pars = "A0", inc_warmup = TRUE)
+```
+
+Now put this into v2 and modify. 
+
+v2-2 now includes closure noise as independent error. 
+
+```{r}
+modi_2 <- stan_model("../stan/A0_v2-2.stan")
+
+# optimizing(modi_2, stan_inpsi)
+
+# vbi <- vb(modi_2, stan_inpsi)
+# summary(vbi)
+
+sampi <- sampling(modi_2, stan_inpsi, pars = "A0", cores = 3, 
+                  control = list(max_treedepth = 25),
+                  chains = 2, iter = 10000)
+summary(sampi)
+
+pairs(sampi, pars = "A0")
+
+stan_trace(sampi, pars = "A0", inc_warmup = TRUE)
+```
+
+This isn't working. I have a lot of redundant parameters. Need a new version with a refigured model block. Try jacking up number of iterations. Didn't work. Now a slightly modded version with uncertain sigma_epsilon and prior thereon
+
+```{r}
+modi_3 <- stan_model("../stan/A0_v2-3.stan")
+
+# optimizing(modi_2, stan_inpsi)
+
+# vbi <- vb(modi_2, stan_inpsi)
+# summary(vbi)
+
+sampi <- sampling(modi_3, stan_inpsi, pars = "A0", cores = 3, 
+                  chains = 2, iter = 10000)
+summary(sampi)
+
+pairs(sampi, pars = "A0")
+
+stan_trace(sampi, pars = c("A0"), inc_warmup = TRUE)
+```
+
+OK, that's not going anywhere. Moving on to v4, which gets rid of matrix-multiplication and instead estimates Qn. 
+
+```{r}
+modi_4 <- stan_model("../stan/A0_v4.stan")
+newinps <- c(list(logQ_hat = 5, sigma_logQ = 1, logn_hat = -3.5, sigma_logn = 0.5),
+             within(stan_inpsi, {
+               dA = t(dA)
+               W = t(W)
+               S = t(S)
+             }))
+
+# optimizing(modi_4, newinps)
+
+sampi <- sampling(modi_4, newinps, cores = 3, chains = 2)
+summary(sampi, pars = "Qn")
+
+stan_trace(sampi, pars = "A0", inc_warmup = TRUE)
+stan_trace(sampi, pars = "Qn", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_dA", inc_warmup = TRUE)
+summary(sampi, pars = "sigma_dA")
+```
+
+Now this works! (It didn't before) I guess the difference must be in how I specify sigma_dA. Best not to do it as input data. 
+
+Save this as A0_v4-1.stan. Then test it using a different dataset. 
+
+```{r}
+pocase <- reachdata$Po
+poinps <- with(pocase, 
+               list(
+  nx = nrow(W),
+  nt = ncol(W),
+  W = W,
+  S = S,
+  dA = dA,
+  logA0_hat = mean(bamr::estimate_logA0(W)),
+  sigma_logA0 = 1,
+  logQ_hat = 6,
+  sigma_logQ = 2,
+  logn_hat = -3.5,
+  sigma_logn = 0.5
+))
+
+# optimizing(modi_4, newinps)
+
+sampi <- sampling(modi_4, poinps, cores = 3, chains = 2)
+summary(sampi, pars = "Qn")
+
+stan_trace(sampi, pars = "A0", inc_warmup = TRUE)
+stan_trace(sampi, pars = "Qn", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_dA", inc_warmup = TRUE)
+summary(sampi, pars = "sigma_dA")
+```
+
+That appears to be really good. Compare it against estA0 method. 
+
+```{r}
+lmests <- estA0(swotlist = within(pocase, {dA = rezero_dA(dA, zero = "min")}))
+stanests <- get_posterior_mean(sampi, "A0")[, "mean-all chains"]
+
+plot(lmests, stanests); abline(0, 1)
+
+plot(lmests, apply(pocase$A, 1, min)); abline(0, 1)
+plot(stanests, apply(pocase$A, 1, min)); abline(0, 1)
+
+```
+
+Cool! TODO: comparison of methods across all cases. 
+
+First add in random closure error. 
+
+```{r}
+modi_4_2 <- stan_model("../stan/A0_v4-2.stan")
+sampi <- sampling(modi_4_2, newinps, cores = 3, chains = 2)
+summary(sampi, pars = "Qn")
+
+stan_trace(sampi, pars = "A0", inc_warmup = TRUE)
+# stan_trace(sampi, pars = "Qn", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_dA", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_err", inc_warmup = TRUE)
+summary(sampi, pars = "sigma_dA")
+```
+
+Nice! Now Po!
+
+```{r}
+sampi <- sampling(modi_4_2, poinps, cores = 3, chains = 2)
+summary(sampi, pars = "Qn")
+
+stan_trace(sampi, pars = "A0", inc_warmup = TRUE)
+stan_trace(sampi, pars = "Qn", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_dA", inc_warmup = TRUE)
+summary(sampi, pars = "sigma_dA")
+```
+
+OK, that took 37 minutes. 
+
+```{r}
+stanests <- get_posterior_mean(sampi, "A0")[, "mean-all chains"]
+
+plot(lmests, stanests); abline(0, 1)
+
+plot(lmests, apply(pocase$A, 1, min)); abline(0, 1)
+plot(stanests, apply(pocase$A, 1, min)); abline(0, 1)
+
+summary(sampi, "A0")
+```
+
+That's not good. Also slow (38 minutes for Po). May be affected by improperly specified model (gotta put in that Jacobian). Also errors are not independent, so there's that. Make a model 4-3 with non-independent errors. 
+
+Done. Try it!
+
+```{r}
+modi_4_3 <- stan_model("../stan/A0_v4-3.stan")
+sampi <- sampling(modi_4_3, newinps, cores = 3, chains = 2)
+summary(sampi, pars = "Qn")
+
+stan_trace(sampi, pars = "A0", inc_warmup = TRUE)
+# stan_trace(sampi, pars = "Qn", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_dA", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_dgdx", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_alpha", inc_warmup = TRUE)
+summary(sampi, pars = "sigma_dA")
+```
+
+Try with uscase?
+
+```{r}
+usinps <- with(uscase, list(
+  logQ_hat = 5,
+  sigma_logQ = 1,
+  logn_hat = -3.5,
+  sigma_logn = 0.5,
+  nx = nrow(W),
+  nt = ncol(W),
+  
+  W = W,
+  S = S, 
+  dA = dA,
+  x = x[, 1],
+  logA0_hat = log(50),
+  sigma_logA0 = 1
+))
+
+sampi <- sampling(modi_4_3, usinps, cores = 3, chains = 2)
+
+stan_trace(sampi, pars = "A0", inc_warmup = TRUE)
+# stan_trace(sampi, pars = "Qn", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_dA", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_dgdx", inc_warmup = TRUE)
+stan_trace(sampi, pars = "dgdx[10]", inc_warmup = TRUE)
+stan_trace(sampi, pars = "alpha", inc_warmup = TRUE)
+stan_trace(sampi, pars = "sigma_alpha", inc_warmup = TRUE)
+```
+

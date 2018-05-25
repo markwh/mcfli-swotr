@@ -1,0 +1,278 @@
+---
+title: "notebook20180413"
+author: "Mark Hagemann"
+date: "April 13, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Manning flow imbalance (gamma)
+
+
+
+```{r}
+# casei <- uscase
+# casei <- uscase %>%
+#   swot_timelag(c(0, -2, -4))
+casei <- reachdata$Po
+
+gammai <- swot_gamma(casei)
+
+plot_DAWG(gammai)
+```
+
+Now decompose gamma into constant (space-invariant) dg/dx, other components. 
+
+$$
+\gamma_{it} = \tau_{it}\bar{\gamma}'_{\cdot t}(x_i - \bar{x})
+$$
+
+```{r}
+dg <- apply(gammai, 2, diff)
+dx <- apply(casei$x, 2, diff)
+
+dgdxbar0 <- (dg / dx) %>% 
+  apply(2, mean) %>% 
+  swot_vec2mat(dg)
+
+dgdxbar <- dgdxbar0 %>% 
+  (function(x) (x[c(1, 1:nrow(x)), ] + x[c(1:nrow(x), nrow(x)), ]) / 2) # give the right dimensions
+
+plot_DAWG(dg/dx)
+plot_DAWG(dg/dx - dgdxbar0)
+
+var(as.vector(dg/dx - dgdxbar0)) / var(as.vector(dg/dx0)) # R2 of ~0.86
+```
+
+But how well does that explain gamma?
+
+```{r}
+deltaxi <- apply(casei$x, 2, function(x) x - mean(x))
+gammahat <- deltaxi * dgdxbar + 1
+
+plot_DAWG(gammahat)
+plot(gammahat, gammai); abline(0, 1)
+
+var(as.vector(gammai - gammahat)) / var(gammai %>% as.vector)
+
+multerr <- gammai / gammahat
+
+```
+
+98% variance explained!
+
+Now can I use this to decompose and modify the closure term? First get the notation right. 
+
+$$
+\gamma_{it} = (\bar{\gamma}'_{\cdot t}(x_i - \bar{x}) + 1) * \epsilon_{it}
+$$
+
+Here the error term has *geometric mean of 1*. Still doesn't fix awkwardness of the model. 
+
+
+```{r}
+decomp_gamma <- function(gammamat, xmat, additive = FALSE) {
+  dg <- apply(gammamat, 2, diff)
+  dx <- apply(xmat, 2, diff)
+  
+  dgdxbar0 <- (dg / dx) %>% 
+    apply(2, mean) %>% 
+    swot_vec2mat(dg)
+  
+  dgdxbar <- dgdxbar0 %>% 
+    (function(x) (x[c(1, 1:nrow(x)), ] + x[c(1:nrow(x), nrow(x)), ]) / 2) # give the right dimensions
+  
+  deltax <- apply(xmat, 2, function(x) x - mean(x))
+  gammahat <- deltax * dgdxbar + 1
+
+  if (additive) {
+    gammaerr <- gammamat - gammahat
+  } else {
+    gammaerr <- gammamat / gammahat
+  }
+  
+  out <- list(gammahat = gammahat, gammaerr = gammaerr, dgdxbar = dgdxbar[1, ])
+  out
+}
+
+foo <- decomp_gamma(swot_gamma(uscase), uscase$x)
+
+plot_DAWG(foo$gammahat)
+plot_DAWG(foo$gammaerr)
+plot.ts(foo$dgdxbar)
+```
+
+
+```{r}
+
+# casej <- uscase %>% 
+#   swot_timelag(c(0, 2, 4))
+casej <- reachdata$Po
+# casej <- reachdata$Platte %>% 
+#   swot_sset()
+
+
+
+
+gammaj <- swot_gamma(casej)
+foo <- decomp_gamma(gammaj, casej$x)
+
+plot_DAWG(gammaj)
+plot_DAWG(foo$gammahat)
+plot_DAWG(foo$gammaerr)
+plot.ts(foo$dgdxbar)
+```
+
+
+Now a function to modify flow imbalance. 
+
+```{r}
+
+manning_rebalance <- function(swotlist, scale_dqdx, additive = FALSE) {
+  gammamat <- swot_gamma(swotlist)
+  gammadecomp <- decomp_gamma(gammamat, swotlist$x, additive = additive)
+  
+  modghat <- gammadecomp$gammahat * scale_dqdx
+  
+  if (additive) {
+    out <- modghat + gammadecomp$gammaerr
+  } else {
+    out <- modghat * gammadecomp$gammaerr
+  }
+} 
+
+foo <- manning_rebalance(casej, 1)
+
+bar <- swot_gamma(casej)
+
+plot(foo, bar); abline(0, 1)
+```
+
+Good. Now how to use this in A0 inference? Need to look back at past weekend's work, how did I apply errors?
+
+- Need to make error matrices, add to manning_linA_closed() 
+- This requires calculating other part of closure term. But I can calculate closure term already. 
+
+```{r}
+casej <- uscase %>% #`(`
+  swot_timelag(c(0, -2, -4))
+foo <- manning_closure(casej)
+bar <- swot_gamma(casej)
+
+plot(bar, foo); abline(0, 1)
+```
+
+Right, manning_closure has arbitrary mean that is related to n. Order of operations:
+
+- Decompose closure into space-invariant dq/dx component and everything else. 
+- Look at relative magnitudes of these
+- Make new closure with new dq/dx via manning_rebalance.
+
+```{r}
+foo <- manning_closure(uscase)
+gamj <- swot_gamma(uscase)
+gamdecj <- decomp_gamma(gamj, uscase$x)
+
+plot_DAWG(foo)
+plot_DAWG(foo / gamj)
+plot_DAWG(foo / gamdecj$gammahat)
+
+plot_DAWG(gamdecj$gammahat)
+
+```
+
+Maybe stop at this characterization. I don't think I'll have time for simulation. Try for 5 minutes to make a modification function.
+
+```{r}
+modify_closure <- function(swotlist, scale_dqdx) {
+  clos1 <- manning_closure(swotlist)
+  
+  gam1 <- swot_gamma(swotlist)
+  
+  gammod <- manning_rebalance(swotlist, scale_dqdx)
+  out <- clos1 / gam1 * gammod
+  out
+}
+
+
+casek <- sscase
+plot_DAWG(manning_closure(casek))
+plot_DAWG(modify_closure(casek, 0.1))
+plot_DAWG(modify_closure(casek, 5))
+```
+
+I think I need to do this in an additive framework for it to matter to A0 inversion. 
+
+For now, come up with the figs I want to show Mike. 
+
+- Show that closed forms of cases work perfectly. 
+- Show that I can calculate closure term
+- Show decompositions of closure term
+- Do the above for:
+    - 3 lisflood cases
+    - Po
+    - Platte
+    - Severn
+- Show impact of clousure magnitude on inference 
+
+
+### Reading at VCU
+
+It just occurred to me that I should characterize relationship between predictor and response errors in A0 regressions. 
+
+```{r}
+# casei <- sscase
+casei <- uscase
+xerr <- manning_linA_closure(casei)
+xclosed <- manning_linA_closed(casei)
+xopen <- manning_ws35(casei)
+
+lhserr <- omegaProduct(xopen) - omegaProduct(xclosed)
+pairs(lhserr)
+rhserr <- omegaProduct_y(xopen, casei$dA) - omegaProduct_y(xclosed, casei$dA)
+
+pairs(cbind(rhserr, lhserr))
+```
+
+
+For differential error, we have the following from Table 3.1 in Carroll et al.:
+
+$$
+\beta = \beta_x \Big(\frac{\sigma_{xw}}{\sigma_{w}^2}\Big) + \frac{\sigma_{\epsilon w}}{\sigma_{w}^2}
+$$
+
+Can I characterize these parts for the cases I have?
+
+- covariance of true and observed against variance of observed
+
+```{r}
+lhsopen <- omegaProduct(xopen) %>% 
+  as.data.frame()
+lhsclosed <- omegaProduct(xclosed) %>% 
+  as.data.frame()
+term1 <- map2_dbl(lhsopen, lhsclosed, cov) / map_dbl(lhsopen, var)
+
+term2 <- map_dbl(lhsopen, ~cov(., rhserr)) / map_dbl(lhsopen, var)
+
+ests1 <- estA0(casei, intercept = FALSE)
+ests1_adj <- (ests1 - term2) / term1
+
+ests1
+ests1_adj
+```
+
+Not so simple, explore more later. Time to switch gears
+
+### Project documentation
+
+- Update readme
+- Explore using pkgdown
+- Document functions
+- Write tests
+
+
+

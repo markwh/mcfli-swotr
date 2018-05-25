@@ -1,0 +1,64 @@
+---
+title: "reading notes"
+author: "Mark Hagemann"
+date: "April 13, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Carroll et al., "Measurement Error in Nonlinear Models"
+
+
+### Chapter 1 - Introduction
+
+Classical measurement error model:
+
+$$
+W_{ij} = X_{ij} + U_{ij}
+$$
+- W is measured
+- X is true
+- U is error
+    - $E[U_{ij} | X_{ij}] = 0$ 
+    - No assumption on heteroscedasticity
+
+Note: observed has larger variance than truth
+
+- Contrast to **Berkson Measurement Error Model**: 
+    - $X_{ij} = W_{ij} + U_{ij}$
+    - $E[U_{ij} | W_{ij}] = 0$
+    - Here truth is more variable than observed. 
+    - Has more statistical power than classical. 
+
+Extensions include adding bias, variance components:
+
+$$
+W_{ij} = \gamma_0 + \gamma_1X_{ij} + U_{ij} \\
+U_{ij} = r_i + \epsilon_{ij} 
+$$
+
+
+### Chapter 2 - Important concepts
+
+Functional vs structural models
+
+- Functional: X_i's are fixed unknown parameters
+    - Or random, but without a specified distribution or distributional parameters
+- Structural: X_i's are random variables
+
+Differential vs nondifferential errors
+
+- Nondifferential: [Y|W, X] only depends on W through X. W is a *surrogate*. i.e. Y|X is indep. of W. 
+- Differential if otherwise. e.g.:
+    - If U is dependent on response errors, then it's differential. 
+
+### Chapter 3 - Linear regression
+
+Check out the following cited references:
+
+- Hasenabeldy, Fuller, and Ware (1988): Indoor Air Pollution and pulmonary performance: investigating errors in exposure assessment. Statistics in Medicine, 8, 1109-1126.
+- Hwang, J.T. (1986) Multiplicative errors in variables models with applications to the recent data released by the U.S. Department of Energy. Journal of the American Statistical Association, 81, 680-688.
+

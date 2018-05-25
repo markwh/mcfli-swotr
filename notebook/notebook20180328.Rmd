@@ -1,0 +1,186 @@
+---
+title: "notebook20180328"
+author: "Mark Hagemann"
+date: "March 28, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Spent some time organizing and updating functions. It will be more work to get full consistency. Not to mention writing tests...
+
+Major things to do now:
+
+- Establish connection between performance diagnostics and actual validations.
+- Run inference, diagnostics, and validation on Lisflood
+    - steady-state
+    - unsteady
+- Write up soup-to-nuts on Pepsi 1 cases
+- Diagnose and fix joint A0-ndot inference
+- Figure out a better dqdx metric that accounts for temporal and spatial sampling. 
+
+
+### Lisflood results
+
+I built out the lisflood functions somewhat. 
+
+```{r}
+lisdata1 <- lis_profiles("../lisflood/toy_1/results_simple/")
+lisreaches1 <- lis_reaches("../lisflood/toy_1/results_simple/")
+
+lisswot1 <- lisreaches1 %>% 
+  mutate(A = D * W) %>% 
+  swot_untidy()
+```
+
+Can I chain together the inference pipeline?
+
+```{r}
+lisswot2 <- lisswot1 %>% 
+  swot_sset(keeplocs = -4, keeptimes = -1:-15)
+plot_DAWG(lisswot2$Q)
+
+
+lisswot3 <- lisswot2 %>% 
+  ccf_lag(verbose = TRUE) 
+plot_DAWG(lisswot3$Q)
+
+estA0(lisswot3)
+
+lisswot3 %>% 
+  estA0_lm() %>% 
+  A0_R2
+
+```
+
+diagnostics now
+
+```{r}
+manning_dqdx(lisswot2)
+manning_dqdx(lisswot3)
+
+val_dqdx(lisswot2$Q)
+val_dqdx(lisswot3$Q)
+```
+
+Further validation
+
+```{r}
+testlist <- lisswot3
+# testlist <- reachdata$Po
+
+val_linA_R2(testlist, mc = FALSE)
+val_log_R2(swotlist = testlist)
+val_plot(testlist, log = TRUE)
+val_plot(testlist, log = FALSE)
+
+val_linA_plot(testlist, mc = TRUE) 
+val_linA_plot(testlist, mc = FALSE)
+
+val_log_termplot(testlist, mc = TRUE, scales = "free_x")
+```
+
+
+Now move on to steady-state case. I need to amend the boundary condition file and rerun. 
+
+```{r}
+q_impose <- c(50, 75, 100, 125, 150, 175, 200, 250, 300)
+
+hfun <- lis_happroxfun(qinfile = "../lisflood/toy_1/bdy_qin.tsv", 
+                       houtfile = "../lisflood/toy_1/bdy_hout.tsv")
+
+tsus <- 186400 # How long to stay at each steady-flow condition
+tchg <- 10368 # How long to take to transition to next steady-state condition
+
+
+newbdry <- lis_bdry(q_impose = q_impose, h_impose = hfun(q_impose), 
+                    time_sustain = tsus, time_change = tchg)
+
+lis_write_bdry(newbdry, "../lisflood/toy_1/const_v2.bdy", header = "See notebook20180328.Rmd")
+
+newbdry$q
+```
+
+Churning through lisflood now. And done!
+
+```{r}
+lis_ss <- lis_profiles("../lisflood/toy_1/results_const_v2/")
+rch_ss <- lis_reaches("../lisflood/toy_1/results_const_v2/")
+
+glimpse(rch_ss)
+
+ggplot(rch_ss, aes(x = time, y = Q, color = loc, group = loc)) + 
+  geom_point()
+
+is_ss <- function(...) {
+  arglist <- list(...)
+  ssvars <- map(arglist, function(x) c(1, diff(x))) %>% 
+    map(function(x) x == 0) %>% 
+    Reduce(`*`, x = .)
+  out <- as.logical(ssvars)
+  out
+}
+
+rch_ss2 <- rch_ss %>% 
+  filter(loc != 4) %>% 
+  arrange(loc, time) %>%
+  group_by(loc) %>% 
+  mutate(steady = is_ss(W, S, Q, H, D)) %>% 
+  ungroup() %>% 
+  glimpse()
+
+summary(rch_ss2)
+n_rch <- length(unique(rch_ss2$loc))
+rch_ss3 <- rch_ss2 %>% 
+  filter(steady) %>% 
+  group_by(time) %>% 
+  filter(sum(steady) == n_rch) %>% 
+  ungroup() %>% 
+  # glimpse() %>% 
+  group_by(Q) %>% 
+  filter(time == time[1]) %>% 
+  glimpse()
+
+
+rch_ss3 %>% 
+  ggplot(aes(x = time, y = Q, color = loc, group = loc)) + 
+  geom_point()
+
+```
+
+Finally ready to make it into swot-like untidy data
+
+```{r}
+ss3data <- rch_ss3 %>% 
+  mutate(A = D * W) %>% 
+  swot_untidy()
+
+estA0(ss3data, zero = "minimum")
+
+val_linA_plot(ss3data)
+val_linA_plot(lisswot3)
+
+val_log_termplot(ss3data, scales = "free_x")
+val_plot(ss3data, log = FALSE)
+val_log_termplot(lisswot3)
+
+```
+
+
+Do ANOVA
+
+```{r}
+anova1 <- val_anova(lisswot3)
+
+val_nd_plot(lisswot3)
+val_nd_plot(ss3data)
+```
+
+This reveals something not good in unsteady data. logn is > 2?!
+
+```{r}
+with(lisswot3)
+```
+

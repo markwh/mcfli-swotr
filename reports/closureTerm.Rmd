@@ -1,0 +1,475 @@
+---
+title: "Closure term investigations"
+author: "Mark Hagemann"
+date: "April 13, 2018"
+output: ioslides_presentation
+---
+
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = FALSE)
+opts_knit$set(root.dir = "~/Documents/mcfli-swotr")
+opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(ProjectTemplate)
+load.project()
+ggplot2::theme_set(theme_bw())
+```
+
+
+## Intro
+
+- A0 inversion does not work.
+- Issue is imperfection of the follwing equation:
+
+$$
+A_{it} X_{it} = A_{it} (W_{it}^{-2/3} S_{it}^{1/2})^{3/5} = (nQ_t)^{3/5}
+$$
+
+- Because:
+    - variable $n$
+    - non-steady-state Q
+    - Manning assumptions imperfect
+    - Laterial, vertical in/outflow
+
+
+## Intro
+
+- Really, the equality is as follows:
+
+$$
+(A_{it} X_{it})^{5/3} =  n_{it}Q_{it} = \exp(\nu_{it} + \gamma_{it})\bar{n}\bar{Q}_t
+$$
+
+- $\gamma_{it} = \log(Q_{it} / \bar{Q})$ is flow variability; $\nu_{it} = \log(n_{it} / \bar{n})$ is all other sources of multiplicative error
+
+
+## Artificially closed cases invert perfectly. 
+
+### Steady-state lisflood:
+
+```{r}
+casej <- sscase
+
+plot(coef(estA0_lm_ws35(ws35mat = manning_linA_closed(casej), casej$dA)),
+     apply(casej$A, 1, min), 
+     xlab = "Predicted A0", ylab = "True A0")
+abline(0, 1)
+
+```
+
+
+## Artificially closed cases invert perfectly. 
+
+### Unsteady lisflood:
+
+```{r}
+casej <- uscase
+
+plot(coef(estA0_lm_ws35(ws35mat = manning_linA_closed(casej), casej$dA)),
+     apply(casej$A, 1, min), 
+     xlab = "Predicted A0", ylab = "True A0")
+abline(0, 1)
+
+```
+
+
+
+## Artificially closed cases invert perfectly. 
+
+### Po:
+
+```{r}
+casej <- reachdata$Po
+
+plot(coef(estA0_lm_ws35(ws35mat = manning_linA_closed(casej), casej$dA)),
+     apply(casej$A, 1, median), 
+     xlab = "Predicted A0", ylab = "True A0")
+abline(0, 1)
+
+```
+
+
+## Artificially closed cases invert perfectly. 
+
+### Platte:
+
+```{r}
+casej <- reachdata$Platte
+
+plot(coef(estA0_lm_ws35(ws35mat = manning_linA_closed(casej), casej$dA)),
+     apply(casej$A, 1, median), 
+     xlab = "Predicted A0", ylab = "True A0")
+abline(0, 1)
+
+```
+
+
+## Experiment: simulate error 
+
+- Start with artificially closed steady-state lisflood case
+- Add random noise -- normal(0, sigma) in linear A space
+    - vary sigma from $10^{-8}$ to $10^{-2}$
+- Invert A0 from modified data matrix
+
+## Experiment: simulate error 
+
+Results: 
+
+![](../graphs/A0_ss_sim1_res.png)
+
+## Experiment: simulate error 
+
+Results: 
+
+![](../graphs/A0_ss_sim1_log_res.png)
+
+- Actual A0 inversion errors agree with simulated for actual closure-term magnitude
+- Not as good for unsteady case, shifted unsteady case
+    - A0 fit worse than expected for non-shifted unsteady
+    - A0 fit better than expected for non-shifted unsteady
+- **Need to explore structure of closure term** esp. flow-imbalance
+
+
+## Structure of closure term $c_{it} = \gamma_{it}  + \nu_{ij}$
+
+
+### steady-state lisflood:
+
+```{r}
+casej <- sscase
+
+closj <- manning_closure(casej, log = TRUE)
+
+plot_DAWG(closj)
+
+```
+
+
+
+## Structure of closure term $c_{it} = \gamma_{it} \nu_{ij}$
+
+
+### Unsteady lisflood:
+
+```{r}
+casej <- uscase
+
+closj <- manning_closure(casej, log = TRUE)
+
+plot_DAWG(closj)
+
+```
+
+
+
+## Structure of closure term $c_{it} = \gamma_{it} \nu_{ij}$
+
+
+### Po:
+
+```{r}
+casej <- reachdata$Po
+
+closj <- manning_closure(casej, log = TRUE)
+
+plot_DAWG(closj)
+
+```
+
+## Structure of closure term $c_{it} = \gamma_{it} \nu_{ij}$
+
+
+### Platte:
+
+```{r}
+casej <- reachdata$Platte
+
+closj <- manning_closure(casej, log = TRUE)
+
+plot_DAWG(closj)
+
+```
+
+
+## Flow Term decompositions
+
+### Steady-state lisflood:
+
+```{r}
+casej <- sscase
+
+closj <- manning_closure(casej, log = TRUE)
+gammaj <- manning_gamma(casej, log = TRUE)
+nuj <- closj -  gammaj
+
+plot_DAWG(gammaj) + ggtitle("flow imbalance (gamma)")
+plot_DAWG(closj)
+plot_DAWG(nuj) + ggtitle("n variability etc. (nu)")
+
+```
+
+## Flow Term decompositions
+
+### Steady-state lisflood:
+
+```{r}
+casej <- sscase
+
+closj <- manning_closure(casej, log = TRUE)
+gammaj <- manning_gamma(casej, log = TRUE)
+nuj <- closj - gammaj
+
+plot_DAWG(gammaj) + ggtitle("flow imbalance (gamma)")
+plot_DAWG(nuj) + ggtitle("n variability etc. (nu)")
+
+```
+
+## Flow Term decompositions
+
+
+### Unsteady lisflood:
+
+```{r}
+casej <- uscase
+
+closj <- manning_closure(casej, log = TRUE)
+gammaj <- manning_gamma(casej, log = TRUE)
+nuj <- closj - gammaj
+
+plot_DAWG(gammaj) + ggtitle("flow imbalance (gamma)")
+plot_DAWG(nuj) + ggtitle("n variability etc. (nu)")
+
+```
+
+
+## Flow Term decompositions
+
+
+### Unsteady lisflood:
+
+```{r}
+casej <- uscase
+
+closj <- manning_closure(casej, log = TRUE)
+gammaj <- manning_gamma(casej, log = TRUE)
+nuj <- closj - gammaj
+
+# plot_DAWG(gammaj) + ggtitle("flow imbalance (gamma)")
+plot_DAWG(nuj) + ggtitle("n variability etc. (nu)")
+
+```
+
+## Flow Term decompositions
+
+
+### Po:
+
+```{r}
+casej <- reachdata$Po
+
+closj <- manning_closure(casej, log = TRUE)
+gammaj <- manning_gamma(casej, log = TRUE)
+nuj <- closj - gammaj
+
+plot_DAWG(gammaj) + ggtitle("flow imbalance (gamma)")
+
+# plot_DAWG(nuj) + ggtitle("n variability etc. (nu)")
+
+```
+
+
+## Flow Term decompositions
+
+
+### Po:
+
+```{r}
+casej <- reachdata$Po
+
+closj <- manning_closure(casej, log = TRUE)
+gammaj <- manning_gamma(casej, log = TRUE)
+nuj <- closj - gammaj
+
+# plot_DAWG(gammaj) + ggtitle("flow imbalance (gamma)")
+plot_DAWG(nuj) + ggtitle("n variability etc. (nu)")
+
+```
+
+## Flow Term decompositions
+
+
+### Platte:
+
+```{r}
+casej <- reachdata$Platte
+
+closj <- manning_closure(casej, log = TRUE)
+gammaj <- manning_gamma(casej, log = TRUE)
+nuj <- closj - gammaj
+
+plot_DAWG(gammaj) + ggtitle("flow imbalance (gamma)")
+# plot_DAWG(nuj) + ggtitle("n variability etc. (nu)")
+
+```
+
+
+## Flow Term decompositions
+
+
+### Platte:
+
+```{r}
+casej <- reachdata$Platte
+
+closj <- manning_closure(casej, log = TRUE)
+gammaj <- manning_gamma(casej, log = TRUE)
+nuj <- closj - gammaj
+
+# plot_DAWG(gammaj) + ggtitle("flow imbalance (gamma)")
+plot_DAWG(nuj) + ggtitle("n variability etc. (nu)")
+
+```
+
+## Gamma term decompositions 
+
+Assume $\gamma_{it}$ comes moestly from space-invariant (but time-variable) $\frac{dQ}{dx}$.
+
+$$
+\begin{aligned}
+\gamma_{it} &= (\bar{\gamma}'_{\cdot t}(x_i - \bar{x}) + 1) * \epsilon_{it} \\
+&= \hat{\gamma}_{it} * \epsilon_{it}
+\end{aligned}
+$$
+
+
+## Gamma term decompositions
+
+### Steady-state lisflood:
+
+```{r}
+casej <- sscase
+
+gammaj <- manning_gamma(casej, log = TRUE)
+decompj <- decomp_gamma(gammaj, xmat = casej$x)
+
+plot_DAWG(decompj$gammahat) + ggtitle("space-invariant dQ/dx component (gamma hat)")
+# plot_DAWG(decompj$gammaerr) + ggtitle("remainder of gamma term (epsilon)")
+
+```
+
+## Gamma term decompositions
+
+### Steady-state lisflood:
+
+```{r}
+casej <- sscase
+gammaj <- manning_gamma(casej, log = TRUE)
+decompj <- decomp_gamma(gammaj, xmat = casej$x)
+
+# plot_DAWG(decompj$gammahat) + ggtitle("space-invariant dQ/dx component (gamma hat)")
+plot_DAWG(decompj$gammaerr) + ggtitle("remainder of gamma term (epsilon)")
+
+```
+
+## Gamma term decompositions
+
+
+### Unsteady lisflood:
+
+```{r}
+casej <- uscase
+gammaj <- manning_gamma(casej, log = TRUE)
+decompj <- decomp_gamma(gammaj, xmat = casej$x)
+
+plot_DAWG(decompj$gammahat) + ggtitle("space-invariant dQ/dx component (gamma hat)")
+# plot_DAWG(decompj$gammaerr) + ggtitle("remainder of gamma term (epsilon)")
+
+```
+
+
+## Gamma term decompositions
+
+
+### Unsteady lisflood:
+
+```{r}
+casej <- uscase
+gammaj <- manning_gamma(casej, log = TRUE)
+decompj <- decomp_gamma(gammaj, xmat = casej$x)
+
+# plot_DAWG(decompj$gammahat) + ggtitle("space-invariant dQ/dx component (gamma hat)")
+plot_DAWG(decompj$gammaerr) + ggtitle("remainder of gamma term (epsilon)")
+```
+
+## Gamma term decompositions
+
+
+### Po:
+
+```{r}
+casej <- reachdata$Po
+gammaj <- manning_gamma(casej, log = TRUE)
+decompj <- decomp_gamma(gammaj, xmat = casej$x)
+
+plot_DAWG(decompj$gammahat) + ggtitle("space-invariant dQ/dx component (gamma hat)")
+# plot_DAWG(decompj$gammaerr) + ggtitle("remainder of gamma term (epsilon)")
+
+```
+
+
+## Gamma term decompositions
+
+
+### Po:
+
+```{r}
+casej <- reachdata$Po
+gammaj <- manning_gamma(casej, log = TRUE)
+decompj <- decomp_gamma(gammaj, xmat = casej$x)
+
+# plot_DAWG(decompj$gammahat) + ggtitle("space-invariant dQ/dx component (gamma hat)")
+plot_DAWG(decompj$gammaerr) + ggtitle("remainder of gamma term (epsilon)")
+```
+
+## Gamma term decompositions
+
+
+### Platte:
+
+```{r}
+casej <- reachdata$Platte
+gammaj <- manning_gamma(casej, log = TRUE)
+decompj <- decomp_gamma(gammaj, xmat = casej$x)
+
+plot_DAWG(decompj$gammahat) + ggtitle("space-invariant dQ/dx component (gamma hat)")
+# plot_DAWG(decompj$gammaerr) + ggtitle("remainder of gamma term (epsilon)")
+
+```
+
+
+## Gamma term decompositions
+
+
+### Platte:
+
+```{r}
+casej <- reachdata$Platte
+gammaj <- manning_gamma(casej, log = TRUE)
+decompj <- decomp_gamma(gammaj, xmat = casej$x)
+
+# plot_DAWG(decompj$gammahat) + ggtitle("space-invariant dQ/dx component (gamma hat)")
+plot_DAWG(decompj$gammaerr) + ggtitle("remainder of gamma term (epsilon)")
+
+```
+
+
+## Next steps:
+
+- Artificially inflate/deflate flow imbalance component of closure term
+- Do similar simulations to earlier, random-noise experiment
+- Bayesian model for A0 inversion accounting for closure components?
+

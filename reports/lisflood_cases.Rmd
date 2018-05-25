@@ -1,0 +1,93 @@
+---
+title: "Lisflood cases for A0 inversion"
+author: "Mark Hagemann"
+date: "April 5, 2018"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = FALSE)
+opts_knit$set(root.dir = "~/Documents/mcfli-swotr")
+opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(ProjectTemplate)
+load.project()
+ggplot2::theme_set(theme_bw())
+```
+
+    
+## Lisflood model
+
+- 3 10-km reaches 
+- Uniform 100-m wide rectangular channel (all reaches)
+- Uniform bed slope within each reach
+- Uniform Manning's n = 0.04
+
+## Model runs
+
+- Steady state
+    - 9 Flow conditions between 50 and 300 cms
+    - Model run until steady state at all reaches
+    - Dataset compiled from steady-state conditions
+- Nonsteady flood wave
+    - NRCS unit hydrograph
+    - Flow between 50 and 300 cms
+
+## Steady-state model
+
+```{r}
+is_ss <- function(...) {
+  arglist <- list(...)
+  ssvars <- map(arglist, function(x) c(1, diff(x))) %>% 
+    map(function(x) x == 0) %>% 
+    Reduce(`*`, x = .)
+  out <- as.logical(ssvars)
+  out
+}
+
+sscase <- lis_profiles("lisflood/toy_1/results_const_v2/") %>% 
+  lis_reaches(slope_method = "s_median", agfun = median) %>% 
+  filter(loc != 4) %>%
+  arrange(loc, time) %>% 
+  group_by(loc) %>% 
+  mutate(steady = is_ss(W, S, Q, H, D)) %>% 
+  group_by(time) %>% 
+  filter(sum(steady) == 3) %>% 
+  group_by(Q) %>% 
+  filter(time == time[1]) %>% 
+  mutate(A = W * D) %>% 
+  select(-steady) %>% 
+  swot_untidy()
+
+swot_plot(sscase)
+```
+
+## Flood wave model
+
+```{r}
+uscase <- lis_profiles("lisflood/toy_1/results_simple_v2/") %>% 
+  lis_reaches(slope_method = "s_mean", agfun = mean) %>% 
+  filter(loc != 4) %>%
+  mutate(A = W * D) %>% 
+  swot_untidy() %>% 
+  swot_sset(keeptimes = -1:-20)
+
+swot_plot(uscase)
+```
+
+## Flood wave model with time shift
+
+```{r}
+shiftcase <- lis_profiles("lisflood/toy_1/results_simple_v2/") %>% 
+  lis_reaches(slope_method = "s_mean", agfun = mean) %>% 
+  filter(loc != 4) %>%
+  mutate(A = W * D) %>% 
+  swot_untidy() %>% 
+  swot_sset(keeptimes = -1:-20) %>% 
+  swot_timelag(c(0, -2, -4))
+
+swot_plot(shiftcase)
+```

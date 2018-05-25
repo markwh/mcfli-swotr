@@ -1,0 +1,69 @@
+---
+title: "Probabilistic Model for A0"
+author: "Mark Hagemann"
+date: "May 7, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This document gives the decomposition of closure error for Mass-conserved Manning's equation.
+
+## Equality 
+
+The equality that *must* hold is as follows:
+
+$$
+n_{it}Q_{it} = W^{-2/3}A^{5/3}S^{1/2}
+$$
+
+This acknowledges that Manning's $n$ can vary in time and space, and that discharge $Q_t$ is not constant in space. These two sources of error can be parsed out as follows:
+
+$$
+n_{it}Q_{it} = exp(\nu_{it} + \gamma_{it})\bar{n}\bar{Q}_t 
+$$
+
+Gamma is thus decomposed:
+
+$$
+\gamma_{it} = \gamma'_t (x_i - \bar{x}) + \epsilon_1
+$$
+
+where $\gamma' = d\gamma / dx$ This recognizes that $\partial Q / \partial x$ is relatively constant in space. The following distributional assumption is placed on the time-series $\gamma'_t$:
+
+
+$$
+\gamma'_t \sim N(0, \sigma_{\gamma'})
+$$
+
+Nu is decomposed:
+
+$$
+\nu_{it} = \alpha_i + \epsilon_2
+$$
+
+We then group the errors into a single term:
+
+$$
+\epsilon_{it} = \epsilon_1 + \epsilon_2
+$$
+
+and we approximate its distribution as 
+
+$$
+\epsilon_{it} \sim N(0, \sigma_\epsilon)
+$$
+
+where (hopefully) $\sigma_\epsilon \ll \sigma_{\gamma'}(x_i - \bar{x})$.
+
+There are other dependencies not accounted for here, like depth-Manning's n relationsips, but these are too unreliable to model at this stage. 
+
+Thus the final model is
+
+$$
+\log ( \bar{Q_t}\bar{n}) + \gamma'_t(x_i - \bar{x})) + \alpha_i + \epsilon_{it} = -\frac{2}{3}\log W_{it} + \frac{5}{3} \log A_{it} + \frac{1}{2} \log S_{it}
+$$
+
+

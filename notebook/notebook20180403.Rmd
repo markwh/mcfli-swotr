@@ -1,0 +1,404 @@
+---
+title: "notebook20180403"
+author: "Mark Hagemann"
+date: "April 3, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Deciding to add some bamr functions into lib, for improving functionality
+
+- now for A0 estimation. Make sure I can do this for width-invariant datasets.
+
+```{r}
+bamr::estimate_logA0(hcl2$W) %>% exp()
+load("../../hydroSWOT/cache/alm.RData")
+summary(alm)
+markstats::ggTermPlot(alm, xvar = "lwbar")
+markstats::ggTermPlot(alm, xvar = "lwsd")
+
+```
+
+Come to think of it, I should also fix ggtermplot. Ugh, that's been on my list for a while. 
+
+OK, I now think the width-invarint case is low priority. sd term doesn't count for much. 
+
+### A0-ndot algorithm. 
+
+I have an idea to try out on the iterative algorithm. What if I adjust ndot in 3/5 space? That way I'm not messing with means in that space. How would that work? Maybe it wouldn't...Wait, yeah it should! Just let Qn be mean of rhs in 3/5 space. 
+
+OK, I'm now doing all of the means in linear A space. Maybe that will help the blowup?
+
+```{r}
+foo <- estA0_ndot(hcl2 %>% swot_sset(keeplocs = 1:16), trace = TRUE, iters = 10)
+
+```
+
+Test it on a Pepsi case. Preferably one with substantial n variability. Like severn?
+
+```{r}
+testcase <- reachdata$Severn
+# val_nd_plot(testcase)
+
+foo <- estA0_ndot(testcase, count = TRUE, iters = 1000)
+
+plot(unlist(foo$Qbarn))
+fooA0 <- Reduce(rbind, foo$A0hats)
+foondot <- Reduce(rbind, foo$ndots)
+
+head(fooA0)
+tail(fooA0)
+
+head(foondot)
+tail(foondot)
+
+plot(fooA0[, 1])
+realA0 <- apply(testcase$A, 1, min)
+
+ind <- nrow(fooA0)
+ind <- 1
+plot(realA0, fooA0[ind, ], log = "xy"); abline(0, 1)
+```
+
+```{r}
+val_nd_plot(testcase)
+bar <- val_anova_lm(testcase)
+summary(bar)
+
+testcase$Ahat <- swot_A(A0vec = fooA0[nrow(fooA0), ], dAmat = testcase$dA)
+manning_qdot(testcase, Avar = "Ahat") %>% plot_DAWG() + scale_y_log10()
+
+testcase$Ahat <- swot_A(A0vec = fooA0[1, ], dAmat = testcase$dA)
+manning_qdot(testcase, Avar = "Ahat") %>% plot_DAWG() + scale_y_log10()
+plot_DAWG(testcase$Q) + scale_y_log10()
+```
+
+Well that's just not working. Think more about it later. Now it's time to focus on lisflood stuff. 
+
+### Lisflood stuff
+
+```{r}
+
+is_ss <- function(...) {
+  arglist <- list(...)
+  ssvars <- map(arglist, function(x) c(1, diff(x))) %>% 
+    map(function(x) x == 0) %>% 
+    Reduce(`*`, x = .)
+  out <- as.logical(ssvars)
+  out
+}
+
+sscase <- lis_profiles("../lisflood/toy_1/results_const_v2/") %>% 
+  lis_reaches(slope_method = "s_median", agfun = median) %>% 
+  filter(loc != 4) %>%
+  arrange(loc, time) %>% 
+  group_by(loc) %>% 
+  mutate(steady = is_ss(W, S, Q, H, D)) %>% 
+  group_by(time) %>% 
+  filter(sum(steady) == 3) %>% 
+  group_by(Q) %>% 
+  filter(time == time[1]) %>% 
+  mutate(A = W * D) %>% 
+  select(-steady) %>% 
+  swot_untidy()
+```
+
+
+Can I test the hypothesis that reach 3 is useless because it does not have any ws variability?
+
+```{r}
+sscase %>% 
+  swot_sset(keeplocs = c(1, 2)) %>% 
+  estA0()
+
+sscase %>% 
+  swot_sset(keeplocs = c(1, 3)) %>% 
+  estA0()
+
+sscase %>% 
+  swot_sset(keeplocs = c(2, 3)) %>% 
+  estA0()
+
+```
+
+Huh, so it does work with reaches 2 and 3, but not reaches 1 and 3. I wonder why. 
+
+- Check out condition numbers
+- Bootstrap times
+
+```{r}
+sscase %>% 
+  swot_sset(keeplocs = c(1, 2)) %>% 
+  estA0_lm() %>% 
+  A0_condno()
+
+sscase %>% 
+  swot_sset(keeplocs = c(1, 3)) %>% 
+  estA0_lm() %>% 
+  A0_condno()
+
+sscase %>% 
+  swot_sset(keeplocs = c(2, 3)) %>% 
+  estA0_lm() %>% 
+  A0_condno()
+
+```
+
+Correct. Now bootstrap. 
+
+```{r}
+
+casei <- uscase %>% 
+  # swot_sset()
+  swot_sset(keeplocs = c(1, 2)) %>% 
+  swot_timelag(c(0, -2))
+
+cols <- 1:ncol(casei$W)
+sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE))
+boot_cases <- map(sampcollist, ~swot_sset(casei, keeptimes = .))
+
+boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+boot_lms <- map(boot_cases, estA0_lm)
+boot_A0 <- map(boot_lms, coef)
+boot_R2 <- map_dbl(boot_lms, A0_R2)
+boot_condno <- map_dbl(boot_lms, A0_condno)
+
+boot_df <- boot_A0 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(boot_nunique, ~mutate(.x, nunique = .y)) %>% 
+  map2(boot_R2, ~mutate(.x, R2 = .y)) %>% 
+  map2(boot_condno, ~mutate(.x, condno = .y)) %>% 
+  bind_rows(.id = "sampno")
+
+boot_df %>%
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>%
+  # filter(nunique > 7) %>%
+  ggplot(aes(x = reach, y = A0_estimate, color = R2)) +
+  geom_point(position = position_jitterdodge()) +
+  # geom_boxplot(fill = NA) +
+  scale_colour_viridis_c() 
+  # geom_violin(fill = NA)
+
+boot_df %>% 
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = R2, y = A0_estimate, color = reach)) +
+  geom_point()
+
+boot_df %>% 
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = condno, y = A0_estimate, color = reach)) +
+  geom_point()
+
+boot_df %>% 
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = condno, y = R2, color = reach)) +
+  geom_point()
+```
+
+How can it be that using reaches 2 and 3 only results in models with infinite condition number, yet the estimate is still correct? Is it because of zero intercept? Must be!
+
+```{r}
+sscase %>% 
+  swot_sset(keeplocs = c(2, 3)) %>% 
+  swot_plot()
+```
+
+It's time I made that termplot function. 
+
+```{r}
+markstats:::ggTermPlot.lm
+
+# Partial fit -- use broom::augment?
+
+auglm <- augment(estA0_lm(sscase)) %>% 
+  gather(key = variable, value = value, -y, -.fitted, -.se.fit)
+
+head(auglm)
+
+```
+
+
+```{r}
+ggTermPlot <- function (object, xvar = NULL, data = NULL, ..., facet_scales = "free") {
+    if (!is.null(data)) 
+        object$call$data <- as.name("data")
+    predvars <- names(stats::model.frame(object))[-1]
+    vis = purrr::map(predvars, ~visreg::visreg(object, xvar = ., plot = FALSE)) %>% 
+      setNames(predvars)
+    
+    if (!is.null(xvar)) {
+      vis <- vis[xvar]
+    }
+    
+    visfits <- map(vis, ~.[["fit"]]) %>% 
+      bind_rows(.id = "variable") %>% 
+      gather(key = varkey, value = x, -variable, -y, 
+             -visregFit, -visregLwr, -visregUpr) %>% 
+      dplyr::filter(variable == varkey) %>% 
+      dplyr::select(-varkey)
+    visres <- map(vis, ~.[["res"]]) %>% 
+      bind_rows(.id = "variable")  %>% 
+      gather(key = varkey, value = x, -variable, -y, 
+             -visregRes, -visregPos) %>% 
+      dplyr::filter(variable == varkey) %>% 
+      dplyr::select(-varkey)
+    
+    out <- visfits %>% 
+      ggplot() + 
+      geom_ribbon(aes(x = x, ymin = visregLwr, ymax = visregUpr), alpha = 0.5) + 
+      geom_line(aes(x = x, y = visregFit)) +
+      geom_point(aes(x = x, y = visregRes), data = visres) +
+      facet_wrap(~variable, scales = facet_scales)
+    out
+}
+
+object <- estA0_lm(sscase %>% swot_sset(keeplocs = c(1, 3)), intercept = FALSE)
+ggTermPlot(object, xvar = "x1")
+ggTermPlot(object, facet_scales = "free_x") + theme_bw()
+```
+
+Cool, I like that that's finally taken care of. Probably I should make a lib/markstats.R to put that in. 
+
+```{r}
+A0_condno(estA0_lm(sscase))
+ggTermPlot(sscase %>% estA0_lm, facet_scales = "fixed")
+```
+
+
+
+### Unsteady case
+
+```{r}
+uscase <- lis_profiles("../lisflood/toy_1/results_simple_v2/") %>% 
+  lis_reaches(slope_method = "s_mean", agfun = mean) %>% 
+  filter(loc != 4) %>%
+  mutate(A = W * D) %>% 
+  swot_untidy() %>% 
+  swot_sset(keeptimes = -1:-20)
+```
+
+
+```{r}
+uscase %>% 
+  swot_sset(keeplocs = 1:2) %>% 
+  estA0()
+```
+
+
+### After speaking with Mike
+
+Try a for-real inversion on steady-state data.
+
+```{r}
+casei <- sscase
+times <- sample(1:ncol(casei$W), 2)
+locs <- sample(1:nrow(casei$W), 2)
+
+xmati <- manning_ws35(casei)[locs, times]
+toinvmat <- xmati %*% diag(c(1, -1))
+invmat <- solve(toinvmat)
+
+rhsi <- (xmati * casei$dA[locs, times]) %*% c(-1, 1)
+
+invmat %*% rhsi
+```
+
+So that's that. 
+
+```{r}
+ggTermPlot(estA0_lm(sscase))
+
+pairs(model.frame(estA0_lm(sscase)))
+
+pairs(model.frame(estA0_lm(sscase, random_omega = TRUE)))
+```
+
+
+Now try correcting things by dividing out real n. 
+
+```{r}
+ni <- with(sscase, manningN(A = A, W = W, S = S, Q = Q))
+ni
+
+w23n <- sscase$W ^ (-2/3) / ni
+
+
+case_closed <- sscase
+case_closed$W <- w23n ^ (-3/2)
+
+estA0(swotlist = case_closed)
+```
+
+
+```{r}
+
+casei <- case_closed
+# casei <- sscase
+
+cols <- 1:ncol(casei$W)
+sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE))
+boot_cases <- map(sampcollist, ~swot_sset(casei, keeptimes = .))
+
+boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+boot_lms <- map(boot_cases, estA0_lm, random_omega = FALSE)
+boot_A0 <- map(boot_lms, coef)
+boot_R2 <- map_dbl(boot_lms, A0_R2)
+boot_condno <- map_dbl(boot_lms, A0_condno)
+
+boot_df <- boot_A0 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(boot_nunique, ~mutate(.x, nunique = .y)) %>% 
+  map2(boot_R2, ~mutate(.x, R2 = .y)) %>% 
+  map2(boot_condno, ~mutate(.x, condno = .y)) %>% 
+  bind_rows(.id = "sampno")
+
+boot_df %>%
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>%
+  # filter(nunique > 7) %>%
+  ggplot(aes(x = reach, y = A0_estimate, color = R2)) +
+  geom_point(position = position_jitterdodge()) +
+  # geom_boxplot(fill = NA) +
+  scale_colour_viridis_c() 
+
+```
+
+```{r}
+casei <- sscase
+times <- sample(1:ncol(casei$W), 2)
+locs <- sample(1:nrow(casei$W), 2)
+# locs <- c(1, 3)
+
+aoi <- apply(casei$A, 1, min)
+dai <- casei$A - swot_vec2mat(aoi, casei$A)
+# dai <- casei$dA
+
+xmati <- manning_ws35(casei)[locs, times] %>% t()
+toinvmat <- xmati %*% diag(c(1, -1))
+invmat <- solve(toinvmat)
+
+rhsi <- (xmati * t(dai[locs, times])) %*% c(-1, 1)
+
+invmat %*% rhsi
+
+```
+
+
+```{r}
+xmeas <- manning_ws35(sscase)
+xreal0 <- manning_ws35(case_closed)
+xreal <- scale(manning_ws35(case_closed), scale = FALSE)
+
+xdiff <- xreal - xmeas
+
+
+
+
+```
+

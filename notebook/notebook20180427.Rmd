@@ -1,0 +1,33 @@
+---
+title: "notebook20180427"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I already did some work this morning looking at likelihood for MJ_collab project. Need to further characterize using Pepsi data. 
+
+```{r}
+library(bamr)
+bd1 <- with(reachdata$Po, bam_data(w = W, s = S, dA = dA, Qhat = Pepsi_v2$Po$QWBM))
+po_llfun <- bam_llfun(bd1)
+po_llfun(A0 = apply(reachdata$Po$A, 1, min), 
+         Q = apply(reachdata$Po$Q, 2, median), 
+         logn = log(0.03), sigma = 0.1)
+partpoll <- partial(po_llfun, 
+                    A0 = apply(reachdata$Po$A, 1, min), 
+                    Q = apply(reachdata$Po$Q, 2, median), 
+                    sigma = 0.1)
+
+logns <- seq(log(0.01), log(0.1), length.out = 20)
+ns <- exp(logns)
+
+nvar_ll <- map_dbl(logns, partpoll)
+
+plot(ns, nvar_ll)
+
+```
+

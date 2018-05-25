@@ -105,13 +105,13 @@ SWOT-like data
 - Flow imbalance estimate
 
 ```{r}
-# swot_dqdx(foolag)
-# swot_dqdx(foo)
+# manning_dqdx(foolag)
+# manning_dqdx(foo)
 dqs_lagged <- reachdata %>% 
   map(possibly(ccf_lag, otherwise = NA)) %>% 
-  map_dbl(possibly(swot_dqdx, otherwise = NA_real_))
+  map_dbl(possibly(manning_dqdx, otherwise = NA_real_))
 dqs_nolag <- reachdata %>% 
-  map_dbl(possibly(swot_dqdx, otherwise = NA_real_))
+  map_dbl(possibly(manning_dqdx, otherwise = NA_real_))
 
 plot(dqs_nolag - dqs_lagged)
 abline(h = 0)

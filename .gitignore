@@ -8,3 +8,6 @@ cache
 *.html
 lisflood/*
 *.zip
+*.log
+*.tex
+data

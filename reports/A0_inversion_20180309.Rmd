@@ -14,6 +14,7 @@ Q_{it} &= \frac{1}{n} W_{it}^{-2/3} A_{it}^{5/3}S_{it}^{1/2} \\
 \implies Q^{3/5}_{it} & = A_{it}\Big(\frac{1}{n} W_{it}^{-2/3} S_{it}^{1/2} \Big)^{3/5}
 \end{aligned}
 $$
+
 For simplicity let $x_{it} = \Big(\frac{1}{n} W_{it}^{-2/3} S_{it}^{1/2} \Big)^{3/5}$, so that $Q^{3/5}_{it} = A_{it}x_{it}$. 
 
 

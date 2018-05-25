@@ -1,0 +1,174 @@
+---
+title: "notebook20180412"
+author: "Mark Hagemann"
+date: "April 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Continuing with gamma term from yesterday.
+
+```{r}
+# gami <- reachdata$Po %>%
+gami <- profs2 %>%
+  swot_sset(keeptimes = -1:-20) %>%
+  swot_gamma()
+
+xmati <- reachdata$Po$x
+
+gami %>% 
+  log %>% 
+  plot_DAWG() +
+  scale_color_continuous("location")
+ggsave("../graphs/fun_gamma1.png")
+
+t(gami) %>% plot_DAWG() +
+  xlab("Location index") +
+  scale_color_continuous("time")
+ggsave("../graphs/fun_gamma2.png")
+
+```
+
+That's really illustrative!
+
+- I wanted to know if for a given time I could consider dgamma/dx to be constant. 
+- Looks like I can, more or less, for Pepsi cases, where flood wave is long relative to river segment length. Not so for lisflood. Make this more concrete by differencing:
+
+```{r}
+apply(gami, 2, diff) %>% 
+  t() %>%
+  plot_DAWG
+
+tsi <- apply(gami, 2, diff) %>% 
+  apply(2, mean) 
+
+plot.ts(tsi)
+
+acf(tsi)
+pacf(tsi)
+
+arima(tsi, order = c(1, 0, 0), method = "ML")
+
+arima.sim(list(ar = c(0.67, -0.31)), n = 100) %>% 
+  plot.ts()
+
+arima.sim(list(ar = c(0.517)), n = 100) %>% 
+  plot.ts()
+
+```
+
+
+
+Starting to get a simulation method going. 
+
+```{r}
+sigma1 <- 0.1
+sigma2 <- 0.2
+
+nx <- 10
+nt <- 100
+
+x_spacing <- 100
+xx <- 1:nx * x_spacing
+
+simgam0 <- rnorm(nt, )
+```
+
+To characterize gamma
+
+```{r}
+swot_parameterize_gamma <- function(gammamat, xmat) {
+  lgam <- log(gammamat)
+  dgdx <- apply(lgam, 2, diff) / apply(xmat, 2, diff)
+  
+  
+  dgdx_mean <- apply(dgdx, 2, mean)
+  
+  armod <- arima(dgdx_mean, order = c(1, 0, 0))
+  
+  ar1 <- armod$coef[1]
+  
+  sig2 <- apply(dgdx, 2, sd)
+  
+  
+
+}
+```
+
+
+OK, this is neat. But maybe not important: time series of log of spatial variance of dgdx has AR(1) struture:
+
+```{r}
+logvarts <- apply(dgdx, 2, var) %>% 
+  log()
+
+pacf(logvarts)
+arima(log)
+
+logvarar1 <- arima(logvarts, order = c(1, 0, 0))
+logvarar1
+
+plot(logvarar1$residuals / logvarts)
+```
+
+I can't get too bogged down in specifics of variabilty right now. I'm focusing on first couple moments. Also, this is daily data, remember. These sorts of structures will not show up in real swot data. 
+
+Just worry about: covariance among rows, columns of gamma. 
+
+```{r}
+swot_gamma(uscase) %>% 
+  plot_DAWG()
+```
+
+
+### Post-eureka moment
+
+Just need to be able to decompose gamma into time means, space means, and residuals. Then I can torque up each of these components for simulation. 
+
+```{r}
+decomp_DAWG <- function(dawgmat) {
+  m.. <- mean(dawgmat) # global mean
+  dm1 <- dawgmat - m..
+  m.t <- swot_vec2mat(apply(dm1, 2, mean), dm1)
+  mi. <- swot_vec2mat(apply(dm1, 1, mean), dm1)
+  
+  m2 <- swot_vec2mat(apply(dm1 - m.t, 1, mean), dm1)
+  m3 <- swot_vec2mat(apply(dm1 - mi., 2, mean), dm1)
+  resid <- dm1 - m.t - m2
+  resid2 <- dm1 - mi. - m3
+  
+  out <- list(m.. = m.., m.t = m.t, mi. = mi., resid = resid)
+  out
+}
+```
+
+Now I can look at this for uscase, etc.
+
+```{r}
+usdecomp <- uscase %>% 
+  swot_gamma() %>% 
+  log() %>% 
+  decomp_DAWG()
+
+plot_DAWG(usdecomp$m.t)
+plot_DAWG(usdecomp$mi.)
+plot_DAWG(usdecomp$resid)
+
+
+```
+
+
+```{r}
+foo <- matrix(rnorm(12), nr = 3)
+
+mu <- mean(foo)
+
+alpha.j <- apply(foo - mu, 2, mean)
+alpha.i <- apply(foo - mu, 1, mean)
+
+
+```
+

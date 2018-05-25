@@ -1,0 +1,68 @@
+---
+title: "Collinearity-simpleMcFLI"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The following is a brief description of mathematical results pertaining to the "simplest McFLI" A0 inversion. I can give further details, including derivations, if necessary. 
+
+The result from the blog post gave the variance of the $A_0$ estimate as $\sigma_c (B^T B)^{-1}$. For a 2-reach case with an arbitrary number of observations, this comes out to: 
+
+$$
+SD(\hat{A_0}) = \frac{\sigma(c)}{\sigma(b_i)} \frac{1}{\sqrt{n(1 - \rho^2)}}
+$$
+
+where:
+
+- $\sigma(\cdot)$ is the root-mean-square: $\sigma(x) = \sqrt{\frac{1}{n} \sum_{i = 1}^n x^2}$. Note that this is computed on the variables, not the errors. We *would* use the standard deviation, but since our model doesn't have an intercept, the math is a little different. 
+- $\rho$ is the correlation coefficient between the two columns of $B$. 
+
+This leads to a question of how to compute $\rho$. I've done some math, and for a trapezoidal channels with bottom width $w$ and side slope $m$, we have the following:
+
+- $b_{t2} = \frac{m_1 d_{t2}}{m_2 d_{t1}} b_{t1}$
+    - where $d_{ti} = W_{ti}^2 - w_i^2$
+- Correlation between $\mathbf{b_1}$ and $\mathbf{b_2}$ (the columns of B) can be obtained from [this nice formula](https://stats.stackexchange.com/a/292697). 
+- Using some approximation, we get a somewhat tidy and somewhat useful solution for $\rho$:
+
+$$
+\rho \approx \Big( 1 + 2 \big[ 1 + (\frac{2}{5} \sigma_*)^2 \big] (1 - \rho_*^2) \Big)^{-1/2}
+$$
+
+- where $\sigma_*$ and $\rho_*$ are standard deviation and correlation, respectively, of and between the two locations' log-transformed width time-series. 
+
+This approximation is pretty good, regardless of which reach's width is used for $\sigma_*$ (validation is from simulations described further down): 
+
+![](rhoapproxval.png)
+
+If width AHG holds, then:
+
+1. $\sigma_* = b \sigma_{logQ}$, where here $b$ is the width-AHG exponent.
+2. $\rho_*$ should be equal to 1. 
+
+Therefore if AHG holds perfectly and the approximation holds perfectly, then the columns of $B$ are perfectly collinear and the estimates of $A_0$ will have infinite variance. Any deviation from perfect collinearity must come from either imperfection in the approximation above or imperfection in AHG.  
+
+Note also that $\rho$ has a floor--even if $\rho_* = 0$, $\rho$ will be nonzero, depending on $\sigma_*$. This also means that more variable Q (larger $\sigma_{logQ}$ and larger AHG width exponents witll have smaller $\rho$.)
+
+
+The above theory was borne out in the a set of simulations. In brief:
+
+- 400 variations on 2-reach setup
+    - 1st reach fixed geometry: w = 10, m = 0.1
+    - 2nd reach vary w on [1, 100], m on [0.01, 10]
+- Simulated Q from lognormal (3, 1), T = 100 times. 
+
+
+- $\rho$ bottomed out at ~0.90, for wide, essentially rectangular channel. Decomposed, this minimum $rho$ comes from $\min (\rho_*) = 0.943; \sigma_* = 0.002$
+
+![](sigmoid_v1.png)
+
+
+If we repeat the experiment but use a more variable discharge ($\sigma_{logQ} = 1.5$), then the result is that the floor on $\rho$ decreases. 
+
+![](sigmoid_v2.png)
+
+
+

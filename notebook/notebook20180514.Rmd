@@ -1,0 +1,124 @@
+---
+title: "notebook20180514"
+author: "Mark Hagemann"
+date: "May 14, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Today and this week: Clean up analysis and presentation of likelihood-based inference of A0. 
+
+Make a document showing math and likelihood plots for simplified case
+
+- Add on priors
+
+Make swot cases for various contrived, simple cases. Show convergence of A0 parameters compared to more easilty inferrable parameters. 
+
+Show how various error structure (gamma decomposition) affects likelihood plots. 
+
+
+How to plot likelihood? 
+
+- Contour funciton where other parameters are estimated via conditional maximum likelihood. 
+
+Make a document showing different representations of mass-conserved Manning's equation. 
+
+- BAM one
+- simplified BAM
+- linear model version
+- pairwise equalities version
+
+Also how these represent error structure
+
+
+### Likelihood plotting
+
+I need a function that will take a likelihood function of arbitrarily many parameters, create a partial function of fewer parameters (the independent variable(s) of my plot), and optimize the other parameters conditional on these independent variable parameters.
+
+```{r}
+nll1 <- reachdata$Severn %>% 
+  swot_sset(keeplocs = 1:2) %>% 
+  make_nllfun()
+
+partmax_ll <- function(nllfun, ...) {
+  partfun <- purrr::partial(nllfun, ...)
+  partopt <- nlm(partfun, p = p)
+  
+}
+```
+
+I need to write up the different likelihood specifications. Then I can code each into a make_nll function in R.
+
+OK, I have a few specifications. 
+
+```{r}
+# This one does SWOT likelihood
+nllfun_v1 <-  function(swotlist) {
+  W <- swotlist$W
+  S <- swotlist$S
+  X <- 4 * log(W) - 3 * log(S)
+  dA <- swotlist$dA
+  
+  llfun <- function(A0vec, logQvec, logn, sigma = 0.25) {
+    A0mat <- swot_vec2mat(rep(A0vec, length.out = nrow(dA)), dA)
+    logQmat <- swot_vec2mat(logQvec, dA)
+    A <- A0mat + dA
+    
+    mat1 <- (X - 10 * log(A) + 6 * logn + 6 * logQmat)^2 / (72 * sigma^2)
+    mat2 <- 10 * log(A)
+    
+    out <- sum(mat1 + mat2)
+    
+    out
+  }
+  llfun
+}
+
+
+# Modified version that can (hopefully) be used with nlm
+nllfun_v4 <-  function(swotlist) {
+  W <- swotlist$W
+  stopifnot(nrow(W) == 2)
+  S <- swotlist$S
+  X <- 2/3 * log(W) - 1/2 * log(S)
+  dA <- swotlist$dA
+  
+  llfun <- function(pars) {
+    A01 <- pars[1] 
+    A02 <- pars[2] 
+    logQn <- pars[3]
+    sigma <- pars[4]
+    A0mat <- swot_vec2mat(c(A01, A02), dA)
+    A <- A0mat + dA
+    
+    mat1 <- (X - 5/3 * log(A) + logQn)^2 / (2 * sigma^2)
+    mat2 <- 10 * log(A)
+    
+    out <- sum(mat1 + mat2)
+    
+    out
+  }
+  llfun
+}
+
+
+foo <- nllfun_v4(swot_sset(reachdata$Po, keeplocs = 1:2))
+
+foo(c(A01 = 1000, A02 = 1000, logQn = 4, sigma = 1))
+nlm(foo, p = c(A01 = 1000, A02 = 1000, logQn = 4, sigma = 1))
+
+optim(par = c(A01 = 1000, A02 = 1000, logQn = 4, sigma = 1), foo)
+optim(par = c(A01 = 1000, A02 = 1000, logQn = 4, sigma = 1))
+
+opt2 <- sscase %>% 
+  swot_sset(keeplocs = 1:2) %>% 
+  nllfun_v4 %>% 
+  optim(par = c(A01 = 10, A02 = 10, logQn = 2, sigma = 1))
+
+opt2
+```
+
+Leave the rest of this as to-do for now. A more fruitful venture might be to contrive a simple case where all of the parameters can be visualized (or all but 1 or 2). 

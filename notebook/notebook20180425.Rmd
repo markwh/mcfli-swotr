@@ -1,0 +1,200 @@
+---
+title: "notebook20180425"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Before I have the skype call with Mike and group, I want to try and see if I can reproduce things using Mike's simplest McFli. I had worked on this recently. When was it? Ah yes, Friday.
+
+```{r}
+h1fun <- function(w) {
+  bs1 <- 1/5
+  bw1 <- 100
+  
+  h1 <- (w - bw1) * bs1 / 2
+  h1
+}
+
+a1fun <- function(w) {
+  bw1 <- 100
+  h1 <- h1fun(w)
+  a1 <- bw1 * h1 + 1/2 * (w - bw1) * h1
+  a1
+}
+
+h2fun <- function(w) {
+  bs1 <- 1/20
+  bw1 <- 50
+  
+  h1 <- (w - bw1) * bs1 / 2
+  h1
+}
+
+a2fun <- function(w) {
+  bw1 <- 50
+  h1 <- h2fun(w)
+  a1 <- bw1 * h1 + 1/2 * (w - bw1) * h1
+  a1
+}
+
+h1fun(100)
+h1fun(103.1)
+a1fun(103.1)
+a2fun(68)
+```
+
+I need to be able to go from Q to geometry.
+
+```{r}
+
+
+bs <- 20 * 1e-5
+Q <- 5
+ss <- 1/5
+bw <- 100
+n <- 0.04
+
+respfun <- function(Q) {
+  
+  lhs <- Q * n * bs ^ (-1/2)
+  obfun <- function(W) {
+    rhs <- (ss / 4 * (W^2 - bw^2)) ^ (5/3) * W^(-2/3)
+    out <- (lhs - rhs)^2
+  }
+  
+  optw <- optimize(f = obfun, interval = c(bw, bw + 10 * bw / ss))
+  W <- optw$minimum
+  A <- (Q * n * bs^(-1/2) * W^(2/3))^(3/5)
+  H <- (W - bw) * ss / 2
+    
+  out <- list(A = A, W = W, H = H)
+}
+
+1 / n * W ^ (-2/3) * A ^ (5/3) * bs ^ (1/2)
+1 / 0.04 * 103.1 ^ (-2/3) * 31.3 ^ (5/3) * bs ^ (1/2)
+
+```
+
+Maybe it's down to exactitude of hydraulic radius?
+
+Anyway, I can run with what I have. 
+
+```{r}
+makeRespFun <- function(n, bw, ss, bs) {
+  scalfun <- function(Q) {
+  
+  lhs <- Q * n * bs ^ (-1/2)
+  obfun <- function(W) {
+    rhs <- (ss / 4 * (W^2 - bw^2)) ^ (5/3) * W^(-2/3)
+    out <- (lhs - rhs)^2
+  }
+  
+  optw <- optimize(f = obfun, interval = c(bw, bw + 10 * bw / ss + 10000 / ss))
+  W <- optw$minimum
+  A <- (Q * n * bs^(-1/2) * W^(2/3))^(3/5)
+  H <- (W - bw) * ss / 2
+    
+  out <- data.frame(A = A, W = W, H = H)
+  out
+  }
+  vecfun <- Vectorize(scalfun, SIMPLIFY = FALSE)
+  out <- function(Q) {
+    dplyr::bind_rows(vecfun(Q))
+  } 
+}
+
+
+r1fun <- makeRespFun(0.04, 100, 1/5, 20 * 1e-5)
+r2fun <- makeRespFun(0.04, 50, 1/20, 20 * 1e-5)
+
+r1fun(5)
+r2fun(5)
+r1fun(20)
+r2fun(20)
+```
+
+Cool. It doesn't vectorize though, huh?
+
+- It does now!
+
+```{r}
+r1fun(c(5, 10))
+```
+
+Now I can do all kinds of crazy experiments!
+
+
+```{r}
+
+bs <- 20 * 1e-5
+n <- 0.04
+bws <- runif(10, 100, 200)
+sss <- 1 / runif(10, 5, 20)
+rfuns <- map2(bws, sss, ~makeRespFun(n = n, bw = .x, ss = .y, bs = bs))
+Qs <- rlnorm(11, log(25), 1)
+
+resps <- map(rfuns, function(x) x(Qs)) %>% 
+  map(~mutate(., Q = Qs, time = 1:nrow(.))) %>% 
+  bind_rows(.id = "loc") %>% 
+  mutate(loc = as.numeric(loc),
+         S = bs) %>% 
+  group_by(loc) %>% 
+  mutate(dA = A - min(A)) %>% 
+  glimpse()
+
+resp_swot <- swot_untidy(resps)
+
+swot_plot(resp_swot)
+```
+
+
+```{r}
+trueA0 <- resp_swot
+
+foolm <- estA0_lm(swotlist = resp_swot)
+
+foolm %>% 
+  summary()
+
+xmat <- as.matrix(model.frame(foolm)[-1])
+
+invmat <- solve(t(xmat) %*% xmat)
+
+diag(invmat)
+```
+
+Just a little aside on how R is handling the matrix inversions. From looking at `summary.lm`.
+
+
+```{r}
+dput(stats:::qr.lm)
+Qr <- foolm$qr
+
+Qr$qr
+rnk <- foolm$rank
+
+R <- chol2inv(Qr$qr[1:rnk, 1:rnk, drop= FALSE])
+diag(R)
+```
+
+This leaves the Qr decomposition as a black box (which extends down to fortran level), as well as the inversion from this decomp.
+
+```{r}
+pairs(t(manning_ws35(resp_swot)))
+```
+
+Can I do the condition-number pruning?
+  
+
+First, try an optimization. 
+
+- Fix Q (several of them)
+- Fix m1, b1, 
+
+
+
+

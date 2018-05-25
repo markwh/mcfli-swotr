@@ -1,0 +1,372 @@
+---
+title: "A0 inference 20180403"
+author: "Mark Hagemann"
+date: "April 3, 2018"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = FALSE)
+opts_knit$set(root.dir = "~/Documents/mcfli-swotr")
+opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(ProjectTemplate)
+load.project()
+ggplot2::theme_set(theme_bw())
+```
+
+
+## Overview
+
+- Lisflood model runs
+    - Steady-state
+    - Nonsteady flood wave
+    
+## Steady-state model
+
+```{r}
+is_ss <- function(...) {
+  arglist <- list(...)
+  ssvars <- map(arglist, function(x) c(1, diff(x))) %>% 
+    map(function(x) x == 0) %>% 
+    Reduce(`*`, x = .)
+  out <- as.logical(ssvars)
+  out
+}
+
+sscase <- lis_profiles("lisflood/toy_1/results_const_v2/") %>% 
+  lis_reaches(slope_method = "s_median", agfun = median) %>% 
+  filter(loc != 4) %>%
+  arrange(loc, time) %>% 
+  group_by(loc) %>% 
+  mutate(steady = is_ss(W, S, Q, H, D)) %>% 
+  group_by(time) %>% 
+  filter(sum(steady) == 3) %>% 
+  group_by(Q) %>% 
+  filter(time == time[1]) %>% 
+  mutate(A = W * D) %>% 
+  select(-steady) %>% 
+  swot_untidy()
+
+swot_plot(sscase)
+```
+
+## Steady state model: inference
+
+It appears to work perfectly!
+
+```{r, echo = TRUE}
+estA0(sscase)
+
+apply(sscase$A, 1, min)
+```
+
+## Steady state model: Diagnostics
+
+Mass-conserved Manning partial residuals in log space
+
+```{r}
+val_log_termplot(sscase)
+```
+
+## Steady state model: Diagnostics
+
+Linear-A-space mass-conserved plot
+
+```{r}
+val_linA_plot(sscase) +
+  stat_smooth(method = "lm", alpha = 0.2, se = FALSE)
+```
+
+## Steady state model: Diagnostics
+
+Manning n vs depth
+
+
+```{r}
+val_nd_plot(sscase)
+```
+
+## How variable are steady-state estimates? 
+
+Bootstrap resampling of model times (n = 1000)
+
+```{r}
+
+casei <- sscase %>% 
+  swot_sset()
+  # swot_sset(keeplocs = c(1, 2)) %>% 
+  # swot_timelag(c(0, -2))
+
+cols <- 1:ncol(casei$W)
+sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE))
+boot_cases <- map(sampcollist, ~swot_sset(casei, keeptimes = .))
+
+boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+boot_lms <- map(boot_cases, estA0_lm)
+boot_A0 <- map(boot_lms, coef)
+boot_R2 <- map_dbl(boot_lms, A0_R2)
+boot_condno <- map_dbl(boot_lms, A0_condno)
+
+boot_df <- boot_A0 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(boot_nunique, ~mutate(.x, nunique = .y)) %>% 
+  map2(boot_R2, ~mutate(.x, R2 = .y)) %>% 
+  map2(boot_condno, ~mutate(.x, condno = .y)) %>% 
+  bind_rows(.id = "sampno")
+
+boot_df %>%
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>%
+  # filter(nunique > 7) %>%
+  ggplot(aes(x = reach, y = A0_estimate, color = R2)) +
+  geom_point(position = position_jitterdodge()) +
+  # geom_boxplot(fill = NA) +
+  scale_colour_viridis_c() 
+
+```
+
+## Resulting variability of discharge estimates (given known n = 0.04)
+
+```{r}
+boot_Ahats <- map(boot_A0, ~swot_A(A0vec = ., dAmat = casei$dA))
+
+boot_Qts <- map(boot_Ahats, ~manningQ(A = ., W = casei$W, S = casei$S, n = 0.04)) %>% 
+  map(~apply(., 2, median)) %>% 
+  map(~data.frame(Q = ., time = 1:length(.))) %>% 
+  bind_rows(.id = "sampno") 
+
+boot_Qts %>% 
+  ggplot(aes(x = time, y = Q, group = sampno)) + 
+  geom_line(size = 0.3, alpha = 0.04)
+
+```
+
+## Other observations
+
+- Sensitive to reach subsetting (more variable, more biased with 2 reaches)
+- No clear relationship between accuracy and $R^2$ or condition number
+
+## Flood wave model
+
+```{r}
+uscase <- lis_profiles("lisflood/toy_1/results_simple_v2/") %>% 
+  lis_reaches(slope_method = "s_mean", agfun = mean) %>% 
+  filter(loc != 4) %>%
+  mutate(A = W * D) %>% 
+  swot_untidy() %>% 
+  swot_sset(keeptimes = -1:-20)
+
+swot_plot(uscase)
+```
+
+## Flood wave model: inference
+
+No bueno. 
+
+```{r, echo = TRUE}
+estA0(uscase)
+
+apply(uscase$A, 1, min)
+```
+
+## Flood wave model: Diagnostics
+
+Mass-conserved Manning partial residuals in log space
+
+```{r}
+uscase %>% 
+  swot_sset(keeptimes = -43:-45) %>% 
+  val_log_termplot()
+```
+
+## Flood wave model: Diagnostics
+
+Linear-A-space mass-conserved plot
+
+```{r}
+uscase %>% 
+  swot_sset(keeptimes = -43:-45) %>% 
+  val_linA_plot() +
+  stat_smooth(method = "lm", alpha = 0.2, se = FALSE)
+```
+
+## Flood wave model: Diagnostics
+
+Manning n vs depth
+
+```{r}
+uscase %>% 
+  swot_sset(keeptimes = -43:-45) %>% 
+  val_nd_plot(plot = TRUE)
+```
+
+## Variability 
+
+Bootstrap resampling of model times (n = 1000)
+
+```{r}
+casei <- uscase %>% 
+  swot_sset()
+  # swot_sset(keeplocs = c(1, 2)) %>% 
+  # swot_timelag(c(0, -2))
+
+cols <- 1:ncol(casei$W)
+sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE))
+boot_cases <- map(sampcollist, ~swot_sset(casei, keeptimes = .))
+
+boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+boot_lms <- map(boot_cases, estA0_lm)
+boot_A0 <- map(boot_lms, coef)
+boot_R2 <- map_dbl(boot_lms, A0_R2)
+boot_condno <- map_dbl(boot_lms, A0_condno)
+
+boot_df <- boot_A0 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(boot_nunique, ~mutate(.x, nunique = .y)) %>% 
+  map2(boot_R2, ~mutate(.x, R2 = .y)) %>% 
+  map2(boot_condno, ~mutate(.x, condno = .y)) %>% 
+  bind_rows(.id = "sampno")
+
+boot_df %>%
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>%
+  # filter(nunique > 7) %>%
+  ggplot(aes(x = reach, y = A0_estimate, color = R2)) +
+  geom_point(position = position_jitterdodge()) +
+  # geom_boxplot(fill = NA) +
+  scale_colour_viridis_c() 
+
+```
+
+## Resulting variability of discharge estimates (given known n = 0.04)
+
+```{r}
+boot_Ahats <- map(boot_A0, ~swot_A(A0vec = ., dAmat = casei$dA))
+
+boot_Qts <- map(boot_Ahats, ~manningQ(A = ., W = casei$W, S = casei$S, n = 0.04)) %>% 
+  map(~apply(., 2, median)) %>% 
+  map(~data.frame(Q = ., time = 1:length(.))) %>% 
+  bind_rows(.id = "sampno") 
+
+boot_Qts %>% 
+  ggplot(aes(x = time, y = Q, group = sampno)) + 
+  geom_line(size = 0.3, alpha = 0.04)
+
+```
+
+
+## Flood wave model with time shift
+
+```{r}
+shiftcase <- lis_profiles("lisflood/toy_1/results_simple_v2/") %>% 
+  lis_reaches(slope_method = "s_mean", agfun = mean) %>% 
+  filter(loc != 4) %>%
+  mutate(A = W * D) %>% 
+  swot_untidy() %>% 
+  swot_sset(keeptimes = -1:-20) %>% 
+  swot_timelag(c(0, -2, -4))
+
+swot_plot(shiftcase)
+```
+
+## Flood wave model: inference
+
+Better! 
+
+```{r, echo = TRUE}
+estA0(shiftcase)
+
+apply(shiftcase$A, 1, min)
+```
+
+## Flood wave model: Diagnostics
+
+Mass-conserved Manning partial residuals in log space
+
+```{r}
+shiftcase %>% 
+  swot_sset(keeptimes = -39:-41) %>% 
+  val_log_termplot()
+```
+
+## Flood wave model: Diagnostics
+
+Linear-A-space mass-conserved plot
+
+```{r}
+shiftcase %>% 
+  swot_sset(keeptimes = -39:-41) %>% 
+  val_linA_plot() +
+  stat_smooth(method = "lm", alpha = 0.2, se = FALSE)
+```
+
+## Flood wave model: Diagnostics
+
+Manning n vs depth
+
+```{r}
+shiftcase %>% 
+  swot_sset(keeptimes = -39:-41) %>% 
+  val_nd_plot(plot = TRUE)
+```
+
+## Variability 
+
+Bootstrap resampling of model times (n = 1000)
+
+```{r}
+casei <- shiftcase %>% 
+  swot_sset()
+  # swot_sset(keeplocs = c(1, 2)) %>% 
+  # swot_timelag(c(0, -2))
+
+cols <- 1:ncol(casei$W)
+sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE))
+boot_cases <- map(sampcollist, ~swot_sset(casei, keeptimes = .))
+
+boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+boot_lms <- map(boot_cases, estA0_lm)
+boot_A0 <- map(boot_lms, coef)
+boot_R2 <- map_dbl(boot_lms, A0_R2)
+boot_condno <- map_dbl(boot_lms, A0_condno)
+
+boot_df <- boot_A0 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(boot_nunique, ~mutate(.x, nunique = .y)) %>% 
+  map2(boot_R2, ~mutate(.x, R2 = .y)) %>% 
+  map2(boot_condno, ~mutate(.x, condno = .y)) %>% 
+  bind_rows(.id = "sampno")
+
+boot_df %>%
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>%
+  # filter(nunique > 7) %>%
+  ggplot(aes(x = reach, y = A0_estimate, color = R2)) +
+  geom_point(position = position_jitterdodge()) +
+  # geom_boxplot(fill = NA) +
+  scale_colour_viridis_c() 
+
+```
+
+## Resulting variability of discharge estimates (given known n = 0.04)
+
+```{r}
+boot_Ahats <- map(boot_A0, ~swot_A(A0vec = ., dAmat = casei$dA))
+
+boot_Qts <- map(boot_Ahats, ~manningQ(A = ., W = casei$W, S = casei$S, n = 0.04)) %>% 
+  map(~apply(., 2, median)) %>% 
+  map(~data.frame(Q = ., time = 1:length(.))) %>% 
+  bind_rows(.id = "sampno") 
+
+boot_Qts %>% 
+  ggplot(aes(x = time, y = Q, group = sampno)) + 
+  geom_line(size = 0.3, alpha = 0.04)
+
+```
+
+## Other observations
+
+- Highly sensitive to offset!
+- cross-covariance function does not always choose optimal offset
+    - may be able to restrict using sensible wave velocity and known distances

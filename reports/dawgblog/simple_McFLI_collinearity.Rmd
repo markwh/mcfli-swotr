@@ -1,0 +1,42 @@
+---
+title: "Collinearity-simpleMcFLI"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The "simplest McFLI" Mike presented in the last couple of blog posts illustrates some of the challenges of McFLI--most acutely, that observations are *very far from independent* in time and space. In this post I'll attempt to quantify that interdependence in space, as well as point out some ways in which the simplest McFLI is better and worse than what might be expected from actual SWOT cases. 
+
+Let's start with the specific problem Mike referenced--that of very large variance of $A_0$ arising from relatively small (1 cm) standard deviations of (height) observation error. Since the model is a simple linear model of the form 
+
+$$
+\mathbf{B} A_0 = \mathbf{c} + \epsilon
+$$
+ 
+(See Mike's post for definitions), the covariance matrix of estimated $A_0$ is equal to $\sigma_H(\mathbf{B}^T \mathbf{B})^{-1}$, where $\sigma_H$ is the standard deviation of height observations. The diagonal entries of this matrix are what we care about--these give the variance of each reach's $A_0$ estimate. The upshot is that, if the diagonal entries of $(\mathbf{B}^T \mathbf{B})^{-1}$ are large, then the $A_0$ estimates are less precise than when these entries are small, and a relatively small amount of uncertainty in $\mathbf{c}$ translates into a large amount of uncertainty in $A_0$. It turns out that $diag((\mathbf{B}^T \mathbf{B})^{-1})$ is large exactly when the columns of $\mathbf{B}$ are highly correlated--either positively or negatively (often called *collinearity*). 
+
+So what is the correlation coefficient between a given two columns of $\mathbf{B}$? Take the case previously where $\mathbf{B}$ has two columns (2 reaches) and $T$ observations, such that the $\mathbf{B}$ matrix is 
+
+$$
+\mathbf{B} = 
+
+\begin{bmatrix} 
+
+{W^{-2/5}_{11}} & {-W^{-2/5}_{21}} \\
+{W^{-2/5}_{12}} & {-W^{-2/5}_{22}} \\
+\vdots & \vdots \\
+{W^{-2/5}_{1T}} & {-W^{-2/5}_{2T}} \\
+
+\end{bmatrix}
+
+=
+
+\begin{bmatrix}
+\mathbf{w}_1^{-2/5} -\mathbf{w}_2^{-2/5}
+\end{bmatrix}
+$$
+
+What is the correlation between the time-vectors $\mathbf{w}_1^{-2/5}$  and $\mathbf{w}_2^{-2/5}$? It must be high! (Highly negative, that is. Near -1.) Getting an 
+

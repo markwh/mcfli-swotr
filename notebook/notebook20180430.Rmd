@@ -1,0 +1,272 @@
+---
+title: "notebook20180430"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Chasing down some results in simplest McFLI. How does standardized regression work when model has no intercept? My instinct is that it's the same, except sd calculation uses zero instead of mean. Verify this empirically. 
+
+```{r}
+verdf <- tibble(x1 = rnorm(300), x2 = x1 * 0.2 + rnorm(300), 
+                y = 0.4 * x1 + 0.8 * x2 + 0.1 + rnorm(300, 0, 1.5))
+
+verdf_sc <- as.data.frame(scale(verdf, center = FALSE))
+
+verlm <- lm(y ~ 0 + x1 + x2, verdf)
+
+verlm_sc <- lm(y ~ 0 + x1 + x2, verdf_sc)
+
+coef(verlm)
+
+coef(verlm_sc)
+
+coef(verlm_sc) * sqrt(mean(verdf$y^2)) / c(sqrt(mean(verdf$x1^2)), sqrt(mean(verdf$x2^2)))
+
+coef(verlm_sc) * sd(verdf$y) / c(sd(verdf$x1), sd(verdf$x2))
+
+coef(verlm_sc) * sd(verdf$y) / c(sqrt(mean(verdf$x1^2)), sqrt(mean(verdf$x2^2)))
+
+coef(verlm_sc) * sqrt(mean(verdf$y^2)) / c(sd(verdf$x1), sd(verdf$x2))
+```
+
+It's almost right! But not quite...
+
+- Update: The fix is to scale but not center!
+
+
+
+```{r}
+coef(verlm)
+
+coef(verlm_sc) * sqrt(mean(verdf$y^2) * 29 / 30) / c(sqrt(mean(verdf$x1^2)), 
+                                                     sqrt(mean(verdf$x2^2)))
+
+mysd <- function(x) sqrt(mean((x - mean(x))^2))
+
+
+coef(verlm_sc) * mysd(verdf$y) / c(sqrt(mean(verdf$x1^2)), sqrt(mean(verdf$x2^2)))
+
+```
+
+OK, eye on the prize. 
+
+
+```{r}
+verlm2_sc <- lm(y ~ x1 + x2, verdf_sc[1:300,])
+
+summary(verlm2_sc)
+```
+
+Not sure why my math is showing 1/n scaling when it clearly should be 1 / sqrt(n). Bah, resolve that later. Forward!
+
+
+
+Use the functions I made last week to generate a bunch of pairs of reaches. See what the correlation coefficient is between them.
+
+
+```{r}
+Qts <- rlnorm(100, 3, 1)
+
+bw1 <- 10
+ss1 <- 1 / 10
+bs <- 2e-5
+
+rfun1 <- makeRespFun(0.04, bw = bw1, ss = ss1, bs = bs)
+Ws1 <- rfun1(Qts)$W
+
+
+sses <- 10^(seq(-2, 1, length.out = 20))
+bws <- bw1 * 10^(seq(-1, 1, length.out = 20))
+
+grid <- expand.grid(ss = sses, bw = bws)
+
+rfuns <- map2(grid$ss, grid$bw, ~makeRespFun(0.04, .y, .x, bs = bs))
+
+resps <- map(rfuns, ~.(Qts))
+
+Ws <- map(resps, ~.[["W"]])
+
+cors <- map_dbl(Ws, function(x) cor(x^-(2/5), Ws1^(-2/5)))
+
+plot(cors)
+
+```
+
+Neat!
+
+```{r}
+grid %>% 
+  mutate(cor = cors) %>% 
+  # filter(ss <= 1) %>% 
+  ggplot(aes(x = bw, y = ss, color = cor)) +
+  geom_point(size = 4) +
+  scale_x_log10() +
+  scale_y_log10()
+
+
+grid %>% 
+  mutate(cor = cors,
+         # bw = as.factor(round(bw, digits = 2))) %>% 
+         bw = as.factor(bw)) %>%
+  # filter(ss <= 1) %>% 
+  ggplot(aes(x = ss, y = cor, color = bw, group = bw)) +
+  geom_line() +
+  scale_x_log10()
+
+plot(Qts)
+```
+
+~~They seem to top out at .88, except for bw < bw1.~~ NOPE! That was an error in my optimize function!
+
+```{r}
+grid %>% 
+  mutate(cor = cors, 
+         bw = as.factor(round(bw, digits = 2))) %>%
+         # bw = as.factor(bw)) %>%
+  # filter(bw > bw1) %>%
+  ggplot(aes(x = ss, y = cor, color = bw, group = bw)) +
+  geom_line() +
+  scale_x_log10() + theme_bw() +
+  guides(color = guide_legend(title = "bottom width (m)", ncol = 2)) +
+  xlab("side slope") + ylab("rho")
+ggsave("../reports/sigmoid_v1.png", height = 4, units = "in")
+
+grid %>% 
+  mutate(cor = cors) %>% 
+  filter(bw < bw1) %>%
+  mutate(bw = as.factor(round(bw, digits = 2))) %>%
+         # bw = as.factor(bw)) %>%
+  ggplot(aes(x = ss, y = cor, color = bw, group = bw)) +
+  geom_line() +
+  scale_x_log10()
+
+rfun2 <- makeRespFun(0.04, 0, 0.1, bs)
+```
+
+Neat!
+
+Just for fun, see how these results gibe with my analytical solution for the correlation. 
+
+```{r}
+logcors <- map_dbl(Ws, ~cor(log(.), log(Ws1)))
+logsds <- map_dbl(Ws, ~sd(log(.)))
+logsd <- sd(log(Ws1))
+
+corests1 <- map2_dbl(logcors, logsds, function(x, y) (1 + 2 * ((2/5)^2 * y^2 + 1) * (1 - x^2))^-(1/2))
+corests2 <- map(logcors, function(x) (1 + 2 * ((2/5)^2 * logsd1^2 + 1) * (1 - x^2))^-(1/2))
+
+plot(corests1, corests2)
+
+png("../reports/rhoapproxval.png", width = 7, height = 4, units = "in", res = 200)
+oldpar <- par(no.readonly = TRUE)
+par(mfrow = c(1, 2))
+plot(corests1, cors, xlim = c(0.75, 1), ylim = c(0.75, 1)); abline(0, 1)
+plot(corests2, cors, xlim = c(0.75, 1), ylim = c(0.75, 1)); abline(0, 1)
+par(oldpar)
+dev.off()
+```
+
+Oh, that's a beautiful thing. 
+
+It's time to write this up enough that I can get it to Mike. Whether it gets developed more from there is his call. Parts to convey:
+
+- Variance inflation for 2-reach case: $\frac{rms(c)}{rms(b_i)} \frac{1}{\sqrt{n(1 - \rho^2)}}$
+- Approximation of $\rho$: 
+    - Derive math beginning with:
+    - $b_{t2} = \frac{m_1 d_{t2}}{m_2 d_{t1}} b_{t1}$
+    - where $d_{ti} = W_{ti}^2 - b_i^2$
+    - Correlation given [here](https://stats.stackexchange.com/a/292697)
+    - Arrive at: 
+    
+$$
+\rho = \Big( 1 + 2 \big[ 1 + (\frac{2}{5} \sigma_*)^2 \big] (1 - \rho_*^2) \Big)^{-1/2}
+$$
+
+    - where:
+        - $\sigma_*$ and $\rho_*$ are standard deviation and correlation in log space of the two columns of B. 
+
+- Connect to AHG. 
+    - $\rho_*$ should be very close to 1. 
+    - $\sigma_*$ is approximately equal to $b \sigma_{logQ}$ where $b$ is width AHG exponent. 
+- Interpret this:
+    - Location-invariant in log space. 
+    - More variable Q, larger AHG b results in smaller $\rho$
+- Experimental results
+    - 400 variations on 2-reach setup
+        - 1st reach fixed geometry: b = 10, m = 0.1
+        - 2nd reach vary b on [1, 100], m on [0.01, 10]
+    - Simulate Q from lognormal (0, 1), T = 100 times. 
+    - Show sigmoid plot for cor vs. side slope, colored by bottom width
+        - Bottoms out at $\rho \approx 0.91$
+        - BTW, these are the approximations using approximation formula
+        - decompose into rhostar, sigmastar. rhostar is never very low. sigmastar may be. 
+    - Same sigmoid plot for Q simulated with sdlog = 1.5
+    
+
+As a function, the rho calculation comes out to:
+
+```{r}
+
+rhofun <- function (x, rho = 0) {
+  out <- (1 + 2 * ((2/5)^2 * x^2 + 1) * (1 - rho^2))^(-1/2)
+  out
+}
+  
+```
+
+
+Now use this to decompose / decode rho's that I'm getting:
+
+```{r}
+plot(logsds, logcors)
+plot(cors, logcors)
+plot(cors, logsds)
+
+logsds[which.min(cors)]
+logcors[which.min(cors)]
+```
+
+```{r}
+
+rhofun(0.002347, rho = 0.9433)
+min(cors)
+```
+
+
+Repeating the above for a flashier stream:
+
+```{r}
+Qts2 <- rlnorm(100, 3, 1.5)
+
+Ws1.2 <- rfun1(Qts2)$W
+
+resps2 <- map(rfuns, ~.(Qts2))
+
+Ws2 <- map(resps2, ~.[["W"]])
+
+cors2 <- map_dbl(Ws2, function(x) cor(x^-(2/5), Ws1.2^(-2/5)))
+
+plot(cors2)
+```
+
+Plot, save, send to Mike!
+
+```{r}
+grid %>% 
+  mutate(cor = cors2, 
+         bw = as.factor(round(bw, digits = 2))) %>%
+         # bw = as.factor(bw)) %>%
+  # filter(bw > bw1) %>%
+  ggplot(aes(x = ss, y = cor, color = bw, group = bw)) +
+  geom_line() +
+  scale_x_log10() + theme_bw() +
+  guides(color = guide_legend(title = "bottom width (m)", ncol = 2)) +
+  xlab("side slope") + ylab("rho")
+ggsave("../reports/sigmoid_v2.png", height = 4, units = "in")
+
+```
+
+

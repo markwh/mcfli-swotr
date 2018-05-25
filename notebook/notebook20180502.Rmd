@@ -1,0 +1,32 @@
+---
+title: "notebook20180502"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Prepping for meeting with Mike et al.
+
+- Update on my n sanity checks in BAM. 
+    - Plot likelihood
+    - Recognize the interdependence of 3 things--A0, 
+    
+What is correlation between WS35 rows on Pepsi data?
+
+```{r}
+
+ws35s <- map(reachdata, manning_ws35)
+
+cormats <- map(ws35s, ~cor(t(.))) %>% 
+  map(~.[upper.tri(.)]) %>% 
+  map(~data.frame(cor = .)) %>% 
+  bind_rows(.id = "case")
+
+cormats %>% 
+  group_by(case) %>% 
+  summarize(medcor = median(cor), maxcor = max(cor))
+```
+
+Now I need to work on making a couple of blog posts. I already have one started. 

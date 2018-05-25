@@ -1,0 +1,61 @@
+---
+title: "notebook20180405"
+author: "Mark Hagemann"
+date: "April 5, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Finally delving to the bottom of A0 inversion. And this time I really mean *inversion*. 
+
+```{r}
+foo <- estA0_lm(shiftcase)
+
+xmat <- model.frame(foo)[-1] %>% as.matrix()
+
+xtxinv <- solve(t(xmat) %*% xmat)
+
+foomse <- markstats::delMSE(foo) %>% mean()
+
+(foomse * xtxinv) %>% sqrt()
+summary(foo)
+
+```
+
+Since theory is not straightforward, do an empirical study. Compare relative magnitudes of closure term to data matrix, in WS35 space; relate this to magnitude of A0 error. 
+
+
+```{r}
+
+sd_dA <- 1.5
+sd_clos <- 0.5
+
+sim_x <- matrix(rnorm(50, 0, 1), ncol = 5)
+sim_closure <- matrix(rnorm(50, 0, sd_clos), ncol = ncol(sim_x))
+sim_dA <- matrix(rnorm(50, 0, sd_dA), ncol = ncol(sim_x))
+
+sim_omegas <- make_omegas(ncol(sim_x))
+sim_lhs <- map(sim_omegas, function(x) (sim_x + sim_closure) %*% diag(x)) %>% 
+  Reduce(rbind, .)
+
+sim_rhs <- map(sim_omegas, function(x) ((sim_x + sim_closure) * sim_dA) %*% -x) %>% 
+  unlist()
+
+sim_df <- as.data.frame(sim_lhs) %>% 
+  setNames(paste0("x", 1:ncol(.))) %>% 
+  mutate(y = sim_rhs)
+
+sim_A0lm <- lm(y ~ 0 + ., sim_df)
+summary(sim_A0lm)
+sim_a0hat <- coef(lm(y ~ 0 + ., sim_df))
+
+sim_a0hat
+  
+
+pairs(sim_df)
+```
+

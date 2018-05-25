@@ -1,0 +1,114 @@
+---
+title: "Collinearity-simpleMcFLI"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The "simplest McFLI" Mike presented in the last couple of blog posts illustrates some of the challenges of McFLI--most acutely, that observations are *very far from independent* in time and space, and this results in suprisingly large uncertainties in $A_0$ estimates. In this post I'll tease out the effects of spatial interdependence using Mike's 2-reach, slope-invariant case. To get up to speed, please refer to Mike's 2 previous posts.
+
+Inference on $A_0$ consists of solving (via least-squares regression) the following linear model:
+
+$$
+\mathbf{B} x = \mathbf{c} + \epsilon
+$$
+
+where the "model matrix" $B$ is constructed from width timeseries in the two reaches. 
+
+$$
+\begin{aligned}
+
+\mathbf{B} &= 
+
+\begin{bmatrix}
+\mathbf{b}_1 & \mathbf{b}_2
+\end{bmatrix} \\
+
+&= 
+
+\begin{bmatrix} 
+
+{W^{-2/5}_{11}} & {-W^{-2/5}_{21}} \\
+{W^{-2/5}_{12}} & {-W^{-2/5}_{22}} \\
+\vdots & \vdots \\
+{W^{-2/5}_{1n}} & {-W^{-2/5}_{2n}} \\
+
+\end{bmatrix}
+\end{aligned}
+$$
+
+
+
+The degree of uncertainty in the vector of $A_0$ estimates is captured in its covariance matrix. As Mike mentioned, this is equal to $\sigma_c(\mathbf{B}^T \mathbf{B})^{-1}$, where $\sigma_c$ is the standard deviation of $c$ errors (a function of height error magnitude). The diagonal entries of this matrix are what we care about--these give the variance of each reach's $A_0$ estimate. Hence if the diagonal entries of $(\mathbf{B}^T \mathbf{B})^{-1}$ are large, then the $A_0$ estimates are less precise than when these entries are small, and a relatively small amount of uncertainty in $\mathbf{c}$ translates into a large amount of uncertainty in $A_0$. It turns out that $diag((\mathbf{B}^T \mathbf{B})^{-1})$ is large *exactly when the columns of $\mathbf{B}$ are strongly correlated*--either positively or negatively (i.e. they are *collinear*). 
+
+In this 2-reach case there is a simple relationship describing $A_0$ uncertainty as a function of the correlation between the columns of $B$. If $\rho$ is the correlation coefficient between the two columns of $\mathbf{b_1}$ and $\mathbf{b_2}$, then 
+
+$$
+\sigma_{\hat{A}_0, i} = \sigma_c \frac{SD(\mathbf{c})}{SD(\mathbf{b}_i)} \frac{1}{\sqrt{n(1 - \rho^2)}}
+$$
+
+where $\sigma$ denotes standard deviation of the subscripted (uncertain) quantities, and $SD(x) = \frac{1}{n-1} \Big(\sum_{i = 1}^n (x - \bar{x})^2\Big)^{1/2}$ is the sample standard deviation of the parenthetical (observed) quantities. 
+
+(This result comes from standardized regression, which transforms the columns of the model matrix to have zero mean and unit variance. Thus transformed, $B^TB$ is exactly the correlation matrix of $B$, which in this case is a $2 \times 2$ matrix with 1's on the diagonals and $\rho$'s on the off-diagonals.)
+
+Note that as $\rho$ gets farther from zero, the variance of the $A_0$ estimate increases, becoming infinity at the extrema of $\pm 1$. This has the effect of increasing the number of observations ($n$) required to achieve a given level of precision in the estimate. 
+
+And here is the heart of the problem. Since flow is conserved, the relationship between $\mathbf{w}_1^{-2/5}$ and $-\mathbf{w}_2^{-2/5}$ must be monotonic, and is likely to be very close to linear--meaning that $\rho$ will be close to $-1$. Hence, as Mike already pointed out, small error in height observations translates to large error in $A_0$ estimates. 
+
+### Connecting $\rho$ to channel geometry
+
+For a trapezoidal channels with bottom width $w$ and side slope $m$, we have the following:
+
+- $w_{t2} = \frac{m_1 d_{t2}}{m_2 d_{t1}} w_{t1}$
+    - where $d_{ti} = W_{ti}^2 - w_i^2$
+- Correlation between $\mathbf{b_1}$ and $\mathbf{b_2}$ (the columns of B) can be obtained from [this nice formula](https://stats.stackexchange.com/a/292697). 
+- Using some approximation, we get a somewhat tidy and somewhat useful solution for $\rho$:
+
+$$
+\rho \approx \Big( 1 + 2 \big[ 1 + (\frac{2}{5} \sigma_*)^2 \big] (1 - \rho_*^2) \Big)^{-1/2}
+$$
+
+- where $\sigma_*$ and $\rho_*$ are standard deviation and correlation, respectively, of and between the two locations' log-transformed width time-series. 
+
+This approximation is pretty good, regardless of which reach's width is used for $\sigma_*$
+
+### Contextualizing using AHG
+
+If width AHG holds, then:
+
+1. $\sigma_* = b \sigma_{logQ}$, where here $b$ is the width-AHG exponent.
+2. $\rho_*$ should be equal to 1. 
+
+Therefore if AHG holds perfectly and the approximation holds perfectly, then the columns of $B$ are perfectly collinear and the estimates of $A_0$ will have infinite variance. Any deviation from perfect collinearity must come from either imperfection in the approximation above or imperfection in AHG.  
+
+Note also that $\rho$ has a floor--even if $\rho_* = 0$, $\rho$ will be nonzero, depending on $\sigma_*$. This also means that more variable Q (larger $\sigma_{logQ}$ and larger AHG width exponents witll have smaller $\rho$.)
+
+### Experimental results
+
+To explore this further, I created 400 variations of the simplest McFLI 2-reach case, holding one reach's geometry fixed while varying the geometry parameters (bottom width, side slope) of the second reach. I then simulated a discharge timeseries of length 100 from a lognormal($\mu = 3, \sigma = 1$) distribution and calculated the geometry response in the two reaches. The specifics are as follows:
+
+- 1st reach fixed geometry: w = 10, m = 0.1
+- 2nd reach vary w on [1, 100], m on [0.01, 10] (both sampled at 20 equidistant values in log-space)
+
+The results are plotted below, and are (I think) quite fascinating! $\rho$ bottoms out at ~0.90, for a wide, essentially rectangular channel in reach 2. 
+
+![](sigmoid_v1.png)
+
+Plugged into equation #### this "best-case" $\rho$ of 0.9 means that $A_0$ standard deviation is roughly 5 times larger than it would be if the reaches' widths were uncorrelated. 
+
+As mentioned above, this result is dependent on flow variability. If flow is simulated such that $SD(logQ) = 1.5$, then the resulting $rho$ is sognificantly lower: 
+
+![](sigmoid_v2.png)
+
+Unfortunately, this is more flow variability than we are likely to see on SWOT rivers. Pepsi 1 cases only have 2 rivers with $SD(logQ) > 1$, and many that are $< 0.3$. 
+
+### Summary
+
+- Precision of $A_0$ estimate can be expressed in terms of correlation between columns of B matrix. More correlation--positive or negative--means more uncertainty in the estimates. 
+- This correlation can further be broken down into standard deviation and correlation of logW time series, and contextualized via AHG. 
+- Empirical results show that it is hard to drive the correlation down very far, and that there is actually an asymptotic limit to how low it can go! 
+- Result is that measurement errors are amplified when propogated into estimate errors. 
+
+While this once again gives a gloomy prognosis for using McFLI with imprecise data, I'll offer the following 2 hopeful caveats. First, adding more reaches could reduce the uncertainty by averaging out errors, although this needs to be explored more rigorously. And second, allowing slope to vary in time and space (as it does) will reduce the collinearity in the model matrix. There are, of course, less hopeful caveats, but I won't go into those here. 

@@ -1,0 +1,255 @@
+---
+title: "notebook20180504"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This morning I'm working with plotting likelihood functions. I should be able to do this for swotlists.
+
+```{r}
+make_nllfun <- function(swotlist) {
+  W <- swotlist$W
+  S <- swotlist$S
+  X <- 4 * log(W) - 3 * log(S)
+  dA <- swotlist$dA
+  
+  llfun <- function(A0vec, alpha, sigma, qdot = 0) {
+    A0mat <- swot_vec2mat(rep(A0vec, length.out = nrow(dA)), dA)
+    A <- A0mat + dA
+    
+    sum1 <- sum(nrow(A) * ncol(A) * log(sigma) + log(A))
+    sum2 <- 1 / (2 * sigma^2) * sum((X + alpha - 10 * log(A))^2)
+    
+    out <- sum1 + sum2
+    out
+  }
+  llfun
+}
+
+# The following copy-pasted for posterity's sake.
+old_nllfun <- function(swotlist) {
+  W <- swotlist$W
+  S <- swotlist$S
+  X <- 4 * log(W) - 3 * log(S)
+  dA <- swotlist$dA
+  
+  llfun <- function(A0vec, alpha, sigma, qdot = 0) {
+    A0mat <- swot_vec2mat(rep(A0vec, length.out = nrow(dA)), dA)
+    A <- A0mat + dA
+    
+    sum1 <- sum(sigma + log(A))
+    sum2 <- 1 / 2 * sigma^2 * sum((X + alpha - 10 * log(A))^2)
+    
+    out <- sum1 + sum2
+    out
+  }
+  llfun
+}
+ 
+new_nllfun <- function(swotlist) {
+  W <- swotlist$W
+  S <- swotlist$S
+  X <- 4 * log(W) - 3 * log(S)
+  dA <- swotlist$dA
+  
+  llfun <- function(A0vec, alpha, sigma, qdot = 0) {
+    A0mat <- swot_vec2mat(rep(A0vec, length.out = nrow(dA)), dA)
+    A <- A0mat + dA
+    
+    sum1 <- sum(sigma + log(A))
+    sum2 <- 1 / 2 * sigma^2 * sum((X + alpha - 10 * log(A))^2)
+    
+    out <- sum1 + sum2
+    out
+  }
+  llfun
+}
+
+
+casei <- reachdata$Po
+
+plot_DAWG(casei$dA)
+min(casei$dA)
+
+nll1 <- make_nllfun(casei)
+
+nll1(1500, log(0.03 * 500), 1)
+```
+
+Now plot this!
+
+```{r}
+# A0s <- seq(-min(casei$dA) + 1, 2 * max(casei$dA), length.out = 20)
+A0s <- seq(log(2000), log(6000), length.out = 50)
+# alphas <- seq(log(0.01 * min(casei$Q)), log(0.06 * max(casei$Q)), length.out = 20)
+alphas <- seq(25, 45, length.out = 50)
+
+plotgrid <- expand.grid(A0 = A0s, alpha = alphas)
+nlls <- map2_dbl(.x = exp(plotgrid$A0), .y = plotgrid$alpha, ~nll1(A0vec = .x, alpha = .y, sigma = 4))
+
+plotgrid %>% 
+  mutate(nll = log(nlls)) %>%
+  # mutate(nll = nlls) %>%
+  ggplot(aes(x = A0, y = alpha, z = nll)) +
+  geom_raster(aes(fill = nll)) +
+  geom_contour(aes(color = nll)) +
+  scale_fill_viridis_c()
+  
+
+```
+
+How's this look with the sscase?
+
+```{r}
+casei <- sscase
+nll1 <- make_nllfun(casei)
+
+A0s <- seq(-min(casei$dA) + 1, 2 * max(casei$dA), length.out = 150)
+# A0s <- seq(log(2000), log(6000), length.out = 50)
+alphas <- seq(log(0.01 * min(casei$Q)), 7 * log(0.06 * max(casei$Q)), length.out = 150)
+# alphas <- seq(25, 45, length.out = 50)
+
+plotgrid <- expand.grid(A0 = A0s, alpha = alphas)
+nlls <- map2_dbl(.x = plotgrid$A0, .y = plotgrid$alpha, ~nll1(A0vec = .x, alpha = .y, sigma = 5))
+
+plotgrid %>% 
+  mutate(nll = log(nlls)) %>%
+  # mutate(nll = nlls) %>%
+  ggplot(aes(x = A0, y = alpha, z = nll)) +
+  geom_raster(aes(fill = nll)) +
+  geom_contour(aes(color = nll)) +
+  scale_fill_viridis_c() +
+  geom_point(aes(x = A0[which.min(nll)], y = alpha[which.min(nll)]))
+  
+```
+
+There does not appear to be a minimum in any of these! EDIT: MATH WAS WRONG. THERE IS A MINIMUM.
+
+
+Here's a new A0 model that doesn't use width variability (for Steve):
+
+```{r}
+almdf <- model.frame(alm)
+head(almdf)
+
+alm2 <- lm(lAo ~ lwbar, almdf)
+summary(alm2)
+summary(alm)
+
+plot(almdf$lAo ~ predict(alm2)); abline(0, 1)
+
+plot(lAo ~ lwbar, almdf)
+```
+
+Back to my likelihood stuff. It's possible that the equifinality comes out of treating all as a single A0. In which case I should try to optimize away the parameters I'm not plotting, including all other A0's. Alternatively, I could supply those others as known values. 
+
+```{r}
+casei <- sscase
+nll1 <- make_nllfun(casei)
+
+# A0s <- seq(-min(casei$dA) + 1, 4 * max(casei$dA), length.out = 150)
+A0s <- seq(0, 300, length.out = 150)
+# alphas <- seq(log(0.01 * min(casei$Q)), 6 * log(0.06 * max(casei$Q)), length.out = 150)
+alphas <- seq(5, 15, length.out = 150)
+
+plotgrid <- expand.grid(A0 = A0s, alpha = alphas)
+nlls <- map2_dbl(.x = plotgrid$A0, .y = plotgrid$alpha, 
+                 ~nll1(A0vec = c(.x, 120, 100), alpha = .y, sigma = 5))
+
+plotgrid %>% 
+  mutate(nll = log(nlls)) %>%
+  # mutate(nll = nlls) %>%
+  ggplot(aes(x = A0, y = alpha, z = nll)) +
+  geom_raster(aes(fill = nll)) +
+  geom_contour(aes(color = nll)) +
+  geom_point(aes(x = A0[which.min(nll)], y = alpha[which.min(nll)])) +
+  scale_fill_viridis_c()
+```
+
+Even when I supply the correct values it's not great! I need to move on to Bayes-ify the linear model method. 
+- See if any likelihood visualization attempts are available online, or in progress
+- Is there an API for stan models that would allow me to calculate likelihood easily?
+
+
+```{r}
+library(bamr)
+library(rstan)
+
+mod1 <- bamr:::stanmodels$manning_nolatent
+mod1@model_code
+mod1@mk_cppmodule
+environment(mod1@mk_cppmodule)$model_cppname
+envir1 <- environment(mod1@mk_cppmodule) %>% as.list()
+mod1_dso <- mod1@dso
+
+
+showMethods("optimizing")
+methods("optimizing")
+getMethod("optimizing", "stanmodel")
+```
+
+
+Try using rstanarm to get results for estA0_lm reproduction.
+
+```{r}
+library(rstanarm)
+
+A0lm1 <- estA0_lm(swotlist = sscase)
+
+stan_lm(formula(A0lm1), data = model.frame(A0lm1), prior = NULL)
+```
+
+Alright, that works. But it doesn't get me closer to good A0 inference. Time to make / augment a stan file for A0 lm. 
+
+How does the Omega method compare against just averaging individual estimates? Math isn't going so well for me, so take an empirical approach. 
+
+```{r}
+testlm1 <- estA0_lm(uscase, symmetric = TRUE)
+
+testlm1.1 <- estA0_lm(swot_sset(uscase, keeplocs = 1:2), symmetric = TRUE)
+testlm1.2 <- estA0_lm(swot_sset(uscase, keeplocs = c(1, 3)), symmetric = TRUE)
+
+coef(testlm1)
+
+coef(testlm1.1)
+
+coef(testlm1.2)
+
+mean(c(coef(testlm1.1)[1], coef(testlm1.2)[1]))
+```
+
+Hmm, it's not so straightforward!
+
+I need a different test case with more locations to plot the pairwise estimates against the grand estimate and the mean or median of pairwise. 
+
+```{r}
+testlm0 <- estA0_lm(reachdata$Po)
+
+coef(testlm0)[1]
+
+pwisecoefs <- map(2:16, ~swot_sset(reachdata$Po, keeplocs = c(1, .))) %>% 
+  map(estA0_lm) %>% 
+  map_dbl(~coef(.)[1])
+
+ggplot() +
+  geom_point(aes(x = 1, y = pwisecoefs)) +
+  geom_hline(aes(yintercept = mean(pwisecoefs))) +
+  geom_hline(aes(yintercept = median(pwisecoefs)), linetype = 2) +
+  geom_hline(aes(yintercept = coef(testlm0)[1]), color = "red")
+
+```
+
+Interesting. Which is most accurate?
+
+```{r}
+median(reachdata$Po$A[1, ])
+```
+
+Looks like lm version is best! Lots more I could investigate here, but let's not get distracted. 
+
+
+Work on getting that stan file going!
+

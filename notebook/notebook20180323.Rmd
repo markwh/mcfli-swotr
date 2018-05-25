@@ -193,5 +193,8 @@ Now on to Q-dependent measures
 ```{r}
 swot_dqdx(toydawg)
 true_dqdx(toydawg$Q)
+
+swot_dqdx(toydawg, method = "reldiff")
+true_dqdx(toydawg$Q, method = "reldiff")
 ```
 

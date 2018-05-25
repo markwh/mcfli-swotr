@@ -1,0 +1,121 @@
+---
+title: "notebook20180418"
+author: "Mark Hagemann"
+date: "April 18, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Yesterday I finally got the Po validation off my plate. I also made the decomposition of gamma term better, and shored up the math. Still *some* work to do on that front, but first I need to get to the bottom of another finding from yesterday: apparent bias in closure term. Since this is multiplicative, it results in sloping residuals. What causes this? Can I fix this?
+
+First, observe what I mean:
+
+```{r}
+casei <- uscase
+# casei <- sscase
+# casei <- reachdata$Po
+# casei <- reachdata$Severn
+
+yobs <- omegaProduct_y(manning_ws35(casei), casei$dA, symmetric = TRUE)
+ytru <- omegaProduct_y(manning_linA_closed(casei), casei$dA, symmetric = TRUE)
+
+plot(yobs ~ ytru); abline(0, 1)
+
+```
+
+Can I show this comes from biased closre term?
+
+```{r}
+xclos <- manning_linA_closure(casei)
+
+xclos <- manning_linA_closed(casei) / manning_ws35(casei)
+
+xclos %>% 
+  hist()
+
+hist(casei$dA)
+hist(manning_ws35(casei) * casei$dA)
+hist(manning_linA_closed(casei) * casei$dA)
+```
+
+Hmm. Let's be more clear about what I want. From notebook work:
+
+$$
+M_{it}\delta A_{it}E[C_{it} - 1] - M_{i't}\delta A_{i't}E[C_{i't} - 1] = M_{it}\delta A_{it} - M_{i't}\delta A_{i't}
+$$
+
+So really just $E[C_{it}] = 1$
+
+```{r}
+mean(manning_closure(casei, log = FALSE))
+```
+
+Do I need a new way of making the closure term? Probably.
+
+```{r}
+foo <- manning_ws35(casei) / manning_linA_closed(casei)
+
+mean(foo)
+geomMean(foo)
+hist(rowMeans(foo))
+hist(rowMeans(t(foo)))
+```
+
+### After consuldting previous notes on closure
+
+See notebook20180407. I can multiply closure by any time vector. 
+
+```{r}
+plot(yreal)
+plot(yobs)
+plot(yreal / yobs)
+plot(yobs / yreal)
+```
+
+```{r}
+yreal <- omegaProduct_y(manning_linA_closed(casei), casei$dA, symmetric = TRUE)
+closi <- manning_ws35(casei) / manning_linA_closed(casei)
+
+rhserri <- omegaProduct_y(closi, dAmat = casei$dA, symmetric = TRUE)
+
+omegsi <- make_omegas(nrow(casei$W), symmetric = TRUE)
+
+rhserri <- map(omegsi, function(x) t(closi) %*% x) %>% 
+  unlist()
+
+plot(rhserri)
+plot(yreal, rhserri)
+
+plot(closi, manning_linA_closed(casei))
+```
+
+
+Can I change this last relationship by modifying closi?
+
+```{r}
+closi %>% dim()
+
+mclosi <- manning_linA_closed(casei, adjust = TRUE)
+munclosi <- manning_ws35(casei)
+closi <- mclosi / munclosi
+
+plot(closi, mclosi)
+plot(closi, munclosi)
+
+cor(as.vector(closi), as.vector(mclosi))
+cor(as.vector(closi), as.vector(munclosi))
+
+plot(closi[, 1:10], mclosi[, 1:10])
+plot(closi[, 18], mclosi[, 18])
+
+plot_DAWG(munclosi)
+plot_DAWG(closi)
+plot_DAWG(mclosi)
+```
+
+Can I scale the columns of X?
+
+

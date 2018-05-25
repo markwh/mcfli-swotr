@@ -1,0 +1,311 @@
+---
+title: "notebook20180420"
+author: "Mark Hagemann"
+date: "April 20, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Checking out A0 inference stuff from Mike
+
+$$
+Bx = c
+$$
+
+
+Replicate the experiment?
+
+```{r}
+h1fun <- function(w) {
+  bs1 <- 1/5
+  bw1 <- 100
+  
+  h1 <- (w - bw1) * bs1 / 2
+  h1
+}
+
+a1fun <- function(w) {
+  bw1 <- 100
+  h1 <- h1fun(w)
+  a1 <- bw1 * h1 + 1/2 * (w - bw1) * h1
+  a1
+}
+
+h2fun <- function(w) {
+  bs1 <- 1/20
+  bw1 <- 50
+  
+  h1 <- (w - bw1) * bs1 / 2
+  h1
+}
+
+a2fun <- function(w) {
+  bw1 <- 50
+  h1 <- h2fun(w)
+  a1 <- bw1 * h1 + 1/2 * (w - bw1) * h1
+  a1
+}
+
+h1fun(100)
+h1fun(103.1)
+a1fun(103.1)
+a2fun(68)
+
+```
+
+
+Now make the model matrix.
+
+```{r}
+
+```
+
+
+OK, well I've done stuff on the window that answers the questions for now (I think). I should work more on this this afternoon. Mike wants an analytical answer. 
+
+## Back to sens. analysis.
+
+```{r}
+casei <- uscase
+newdgdx <- 1.66e-5
+newalpha <- 4.7e-3
+newerr <- 1.96e-2
+
+
+
+characterize_closure(casei)
+
+closlist <- map(1:100, ~modify_closure(casei, sigma_dgdx = newdgdx, 
+                                       sigma_alpha = newalpha, sigma_err = newerr))
+
+WS35list <- map(closlist, ~manning_linA_closed(casei) * exp(.))
+
+A0lmlist <- map(WS35list, ~estA0_lm_ws35(., dAmat = casei$dA))
+
+map(A0lmlist, tidy) %>% 
+  bind_rows(.id = "repno") %>% 
+  glimpse() %>% 
+  ggplot(aes(x = term, y = estimate)) +
+  geom_point()
+
+```
+
+Now do a bunch, ranging from uscase to sscase. 
+
+```{r}
+characterize_closure(sscase)
+
+uscase %>% 
+  swot_timelag(c(0, -2, -4)) %>% 
+  characterize_closure()
+```
+
+```{r}
+
+rep_closmod <- function(n, ...) {
+  out <- lapply(1:n, function(x) modify_closure(...))
+  out
+}
+
+
+dgdxsims <- 10^seq(-4, -8, length.out = 20)
+dgdxdf <- data.frame(simcond = 1:length(dgdxsims), dgdx = dgdxsims)
+
+closlist <- map(dgdxsims, ~rep_closmod(100, swotlist = casei, sigma_dgdx = ., 
+                                       sigma_alpha = newalpha, sigma_err = newerr))
+
+
+WS35list <- map(closlist, function(x) map(x, ~manning_linA_closed(casei) * exp(.)))
+
+A0lmlist <- map(WS35list, function(x) map(x, ~estA0_lm_ws35(., dAmat = casei$dA)))
+
+A0lmdf <- map(A0lmlist, function(x) map(x, tidy)) %>% 
+  map(~bind_rows(., .id = "sampno")) %>% 
+  bind_rows(.id = "simcond") %>% 
+  glimpse() 
+
+A0lmdf %>% 
+  filter(term == "x1") %>% 
+  mutate(simcond = as.numeric(simcond)) %>% 
+  left_join(dgdxdf) %>% 
+  ggplot(aes(x = dgdx, y = estimate)) +
+  geom_point() +
+  scale_x_log10()
+```
+
+That's cool, but I need a more efficient way to modify and simulate. 
+
+- Specify a bunch of parameters, each as a single object (list, or vector). 
+- map that through the modify_closure function. 
+- estimate, tidy, bind
+
+Most of these can be bundled together. 
+
+- mod_A0_lm: take params and a swotlist, get lm with modified closure.
+
+```{r}
+mod_A0_lm <- function(params, swotlist) {
+  closi <- modify_closure(swotlist, sigma_dgdx = params$dgdx, 
+                 sigma_alpha = params$alpha, sigma_err = params$err)
+  ws35i <- manning_linA_closed(swotlist) * exp(closi)
+  lmi <- estA0_lm_ws35(ws35i, dAmat = swotlist$dA)
+  lmi
+}
+
+
+dgdx = 10^seq(-4, -7, length.out = 10)
+alpha = 10^seq(-2, -5, length.out = 5)
+err = 10^seq(-2, -5, length.out = 5)
+
+paramdf <- expand.grid(dgdx = dgdx, alpha = alpha, err = err) %>% 
+  mutate(prow = 1:nrow(.))
+
+simres_lm <- paramdf %>% 
+  split(1:nrow(.)) %>% 
+  map(~mod_A0_lm(., swotlist = casei))
+
+simres_df <- simres_lm %>% 
+  map(tidy) %>% 
+  bind_rows(.id = "prow") %>% 
+  mutate(prow = as.numeric(prow)) %>% 
+  left_join(paramdf, by = "prow")
+
+```
+
+Plot!
+
+```{r}
+simres_df %>% glimpse() %>% 
+  filter(term == "x1") %>% 
+  select(estimate, dgdx, alpha, err) %>% 
+  ggplot(aes(x = dgdx, y = estimate)) +
+  geom_point() +
+  scale_x_log10()
+
+simres_df %>% glimpse() %>% 
+  filter(term == "x1") %>% 
+  select(estimate, dgdx, alpha, err) %>% 
+  ggplot(aes(x = alpha, y = estimate)) +
+  geom_point()
+
+simres_df %>% glimpse() %>% 
+  filter(term == "x1") %>% 
+  select(estimate, dgdx, alpha, err) %>% 
+  ggplot(aes(x = err, y = estimate)) +
+  geom_point()
+```
+
+Nothing too surprising--dgdx blows things up way faster than alpha or err do. Could be a problem with magnitudes. Hard to compare these as it is. 
+
+I'm going to shift back to an anlytical approach--or something Bayesian. 
+
+OK, I think I have a Bayesian skeleton. Put it into a stan file. NO! I can do it right here!
+
+```{r}
+library(rstan)
+```
+
+
+```{stan output.var = "A0stan"}
+data {
+  int<lower=0> N;
+  int<lower=0> T;
+  real dA[N, T];
+  real logM[N,T];
+  real x[N];
+}
+
+parameters {
+  real<lower=0> A0[N];
+  real logQn[T];
+  real gamma[N,T];
+  real nu[N];
+
+  real mu_alpha;
+  real mu_beta;          // beta.c in original bugs model
+
+  real<lower=0> sigmasq_y;
+  real<lower=0> sigmasq_alpha;
+  real<lower=0> sigmasq_beta;
+}
+transformed parameters {
+  real logA;
+
+  real<lower=0> sigma_y;       // sigma in original bugs model
+  real<lower=0> sigma_alpha;
+  real<lower=0> sigma_beta;
+  
+  logA = log(A0 + dA);
+  
+  sigma_y = sqrt(sigmasq_y);
+  sigma_alpha = sqrt(sigmasq_alpha);
+  sigma_beta =  sqrt(sigmasq_beta);
+}
+model {
+  
+  mu_alpha ~ normal(0, 100);
+  mu_beta ~ normal(0, 100);
+  sigmasq_y ~ inv_gamma(0.001, 0.001);
+  sigmasq_alpha ~ inv_gamma(0.001, 0.001);
+  sigmasq_beta ~ inv_gamma(0.001, 0.001);
+  alpha ~ normal(mu_alpha, sigma_alpha); // vectorized
+  beta ~ normal(mu_beta, sigma_beta);  // vectorized
+  for (n in 1:N)
+    for (t in 1:T) 
+      y[n,t] ~ normal(alpha[n] + beta[n] * (x[t] - xbar), sigma_y);
+
+}
+
+```
+
+Scratch that. I made a separate stan file. Try it out!
+
+```{r}
+bat_data <- function(swotlist, logA0_hat = 10, sigma_logA0 = 20, 
+                     logQ_hat = 5, sigma_logQ = 10, 
+                     logn_hat = -5, sigma_logn = 10,
+                     sigma_dgdx = 1e-5, sigma_alpha = 1e-1, sigma_err = 1e-1) {
+  W <- swotlist$W
+  dA <- swotlist$dA
+  S <- swotlist$S
+  x <- swotlist$x[, 1]
+  
+  out <- list(nt = ncol(W), nx = nrow(W), 
+              dA = dA, W = W, S = S, x = x, 
+              logA0_hat = logA0_hat, sigma_logA0 = sigma_logA0,
+              logQ_hat = logQ_hat, sigma_logQ = sigma_logQ,
+              logn_hat = logn_hat, sigma_logn = sigma_logn,
+              sigma_dgdx = sigma_dgdx, sigma_alpha = sigma_alpha, 
+              sigma_err = sigma_err)
+  out
+}
+
+dati <- bat_data(uscase)
+
+mod1 <- stan_model("../stan/A0.stan")
+
+vbi <- vb(mod1, data = dati)
+sampi <- sampling(mod1, data = dati, cores = 3, chains = 3)
+
+summary(vbi)
+smryi <- summary(sampi)
+smryi$summary %>% 
+  head(50)
+  # tail()
+
+vb_ss <- vb(mod1, bat_data(sscase), iter = 100000)
+
+summary(vb_ss)
+
+optimizing(mod1, data = bat_data(sscase))
+```
+
+Next I should try:
+
+- diagnosing this model
+- Making a Bayesian regression model
+    - Regular regression, reproduce lm() results
+    - Add in complex error structure. 

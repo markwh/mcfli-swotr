@@ -1,0 +1,218 @@
+---
+title: "notebook20180406"
+author: "Mark Hagemann"
+date: "April 6, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Reading at VCU library
+
+Books that cover error in variable / measurement error models
+
+- Andersen and Skovgaard: Regression with Linear Predictors 
+    - Section in last chapter of book
+- Young: Handbook of Regression Methods
+    - Most of chapter 11
+- Carroll, Ruppert, Strefanski, and Crainiceanu: Measurement Error in Nonlinear Models
+    - Most of the book!
+    
+
+### Young, ch. 11
+
+$$
+\mathbf{W = X + U}
+$$
+
+- $\mathbf{W}$ is observed
+- $\mathbf{X}$ is true predictors
+- $\mathbf{U}$ is errors
+
+Reliability ratio:
+
+$$
+\lambda_j = \frac{\sigma^2_{X_j}}{\sigma^2_{X_j} + \sigma^2_{U_j}}
+$$
+
+- Simple relationship exists between $\lambda_j$ and true vs estimated parameters (manifests as bias), but only for SLR. 
+- In multiple regression this becomes "Attenuation bias" and is apparently more complex. More info available in Carroll et al.
+
+
+### Carroll et al.
+
+Chapters 1-3 (pp. 1 - 64) appear to be relevant. But this will take some energy and library hours to get through. 
+
+
+## Simulation and empirical study. 
+
+Meanwhile I'll just take the empirical approach, as I started to do yesterday.
+
+In hindsight I should start with a dimensionally similar system to my sscase. But as I devised, with the following modifications:
+
+- X is sampled from a normal(0, 1) distribution. 
+- deltaA is sampled from a normal(0, sig_A) distribution, and adjusted to have median equal to zero
+    - Thus A0 will all be zero
+- Delta is sampled from a normal(0, sig_D) distribution
+
+With the following experimental design
+
+- sig_A and sig_D vary independently between 0.01 and 2
+- 100 repeats for each
+
+Plot and model relationships between A0 errors (bias, variance wrt zero). Also relate to lambda
+
+Then validate for lisflood and Pepsi 1 cases. 
+
+- Need a function to calculate Delta matrix
+- Also function to calculate sig_A, sig_D, lambdas. 
+
+
+Here we go!
+
+### Simulation
+
+Parameters of simulation
+
+```{r}
+nt <- 9
+nx <- 3
+
+sig_A <- 1.5
+sig_D <- 0.2
+```
+
+Simulate X, A, Delta
+
+```{r}
+sim_x <- matrix(rnorm(nt * nx, 0, 1), ncol = nx)
+sim_A <- matrix(rnorm(nt * nx, 0, sig_A), ncol = nx)
+sim_dA <- sim_A - swot_vec2mat(apply(sim_A, 2, median), sim_A)
+
+sim_D <- matrix(rnorm(nt * nx, 0, sig_D), ncol = nx)
+
+sim_omegas <- make_omegas(nx)
+
+sim_lhs <- map(sim_omegas, function(x) (sim_x + sim_D) %*% diag(x)) %>% 
+  Reduce(rbind, .)
+
+sim_rhs <- map(sim_omegas, function(x) ((sim_x + sim_D) * sim_dA) %*% -x) %>% 
+  unlist()
+
+```
+
+Because of potential distributional issues with simulated data, I think it's better to start with modifying real data. 
+
+Start with that closure funciton! To be clear: Xobs = Xreal + closure. 
+
+```{r}
+manning_linA_closure <- function(swotlist, ndot = 1) {
+  
+  if (length(ndot) > 1 && !is.matrix(ndot)) {
+    ndot <- swot_vec2mat(ndot, swotlist$W)
+  }
+  
+  geomMean <- function(x) {
+    exp(mean(log(x)))
+  }
+  
+  Qnvec <- 
+  
+  trueN <- manningN_list(swotlist)
+  trueNdot <- trueN / geomMean(trueN)
+  
+  meas <- manning_ws35(swotlist = swotlist, ndot = ndot)
+  # Qmat <- swot_vec2mat(apply(swotlist$Q, 2, mean), swotlist$Q)
+  # Qmat <- swotlist$Q
+  
+  true1 <- manning_ws35(swotlist = swotlist, ndot = trueNdot)
+  meanrat <- mean(meas) / mean(true1)
+  
+  # meanrat <- mean(meas / true1)
+  
+  true2 <- true1 * meanrat
+  closr <- true2 - meas
+  
+  out <- list(obs = meas, real = true2, closure = closr)
+  out
+}
+
+foo <- manning_linA_closure(uscase)
+
+plot_DAWG(foo$real)
+
+estA0_lm_ws35(foo$obs + foo$closure, dAmat = uscase$dA) %>% summary()
+
+estA0_lm_ws35(foo$real, dAmat = uscase$dA) %>% summary()
+
+```
+
+Now I can do a simple simulation using sscase.
+
+```{r}
+casei <- sscase
+closi <- manning_linA_closure(casei)
+obswsmat <- manning_ws35(casei)
+truewsmat <- obswsmat + closi
+
+obsxmat <- estA0_moddf(obswsmat, dAmat = casei$dA)
+truexmat <- estA0_moddf(truewsmat, dAmat = casei$dA)
+
+mat1 <- as.matrix(select(obsxmat, -y))
+mat2 <- as.matrix(select(truexmat, -y))
+deltamat <- mat2 - mat1
+
+plot(deltamat[, 1])
+pairs(deltamat)
+```
+
+This is some wild stuff. 
+
+```{r}
+pairs(t(closi))
+# pairs(closi)
+
+eigen(cov(t(closi) * 182.18735))$values
+
+```
+
+OK, closure term is highly correlated across locations. That would indicate a time-varying component of n. 
+
+```{r}
+val_anova(casei)
+```
+
+Funny, it doesn't show up there. 
+
+
+```{r}
+plot_DAWG(closi)
+plot_DAWG(obswsmat)
+plot_DAWG(truewsmat)
+
+summary(estA0_lm_ws35(truewsmat, casei$dA))
+
+nmati <- with(casei, manningN(A, W, S, Q))
+
+plot_DAWG(nmati ^ (-3/5) * obswsmat)
+plot_DAWG(obswsmat / mean(nmati^(3/5)))
+
+plot_DAWG(nmati ^ (-3/5))
+
+
+obswsmat_meann <- obswsmat / mean(nmati^(3/5))
+truewsmat_truen <- obswsmat * nmati ^ (-3/5)
+lm2 <- estA0_lm_ws35(obswsmat_meann, casei$dA)
+lm3 <- estA0_lm_ws35(truewsmat_truen, casei$dA)
+summary(lm2)
+summary(lm3)
+
+diffmat2 <- truewsmat_truen - obswsmat_meann
+plot_DAWG(diffmat2)
+mean(diffmat2)
+
+```
+

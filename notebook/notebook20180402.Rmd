@@ -1,0 +1,243 @@
+---
+title: "notebook20180402"
+author: "Mark Hagemann"
+date: "April 2, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I have some more to do on writing up and pushing forward A0 inversion from toy case, but for now it's time to tie up some loose ends.
+
+First, Wilammette discharge using A0 ests and n = 0.03. 
+
+```{r}
+hc_h <- read.csv("../../A0_identifiability/data/HydraulicControlReaches/H.txt", sep = "\t", header = FALSE) %>% 
+  as.matrix()
+hc_w <- read.csv("../../A0_identifiability/data/HydraulicControlReaches/W.txt", sep = "\t", header = FALSE) %>% 
+  as.matrix()
+hc_s <- read.csv("../../A0_identifiability/data/HydraulicControlReaches/S.txt", sep = "\t", header = FALSE) %>% 
+  as.matrix()
+hc_q <- read.csv("../../A0_identifiability/data/HydraulicControlReaches/Qobs.txt", sep = "\t", header = FALSE) %>% as.matrix()
+
+hclist <- list(H = hc_h, W = hc_w, S = hc_s, Q = hc_q)
+
+swot_plot(hclist)
+
+hclist$dA <- calcdA_mat(w = hclist$W, h = hclist$H, zero = "minimum")
+
+swot_plot(hclist)
+```
+
+Now estimate A0
+
+```{r}
+foo <- hclist %>% 
+  ccf_lag(Ahat = TRUE, verbose = TRUE)
+
+plot_DAWG(manning_qdot(hclist, Avar = "Ahat")) + scale_y_log10()
+```
+
+```{r}
+hclist$Ahat <- swot_A(A0vec = estA0(swotlist = hclist, zero = "minimum"), 
+                      dAmat = hclist$dA)
+qhat <- with(hclist, manningQ(A = Ahat, W = W, S = S, n = 0.03))
+
+with(hclist, 1 / 0.03 * Ahat^(5/3) * W^(-2/3) * S^(1/2)) %>% 
+  plot_DAWG()
+
+plot_DAWG(qhat)
+
+```
+
+
+That's not so good. Based on qdot plot, let's try subsetting the reaches. 
+
+```{r}
+hcl_ss1 <- swot_sset(hclist, keeplocs = 1:10)
+
+estA0(hcl_ss1)
+
+hcl_ss1$Ahat <- swot_A(A0vec = estA0(swotlist = hcl_ss1, zero = "minimum"), 
+                      dAmat = hcl_ss1$dA)
+qhat <- with(hcl_ss1, manningQ(A = Ahat, W = W, S = S, n = 0.03))
+
+with(hcl_ss1, 1 / 0.03 * Ahat^(5/3) * W^(-2/3) * S^(1/2)) %>% 
+  plot_DAWG()
+
+plot_DAWG(qhat)
+
+manning_nplot(hcl_ss1)
+```
+
+Nothing doing. I could try stepwise. First, look at VIF
+
+```{r}
+library(car)
+
+hcl_lm <- estA0_lm(hclist)
+coef(hcl_lm)
+A0_condno(hcl_lm)
+
+
+vif(hcl_lm)
+
+```
+
+Now I have Q data. If n = 0.03, then 
+
+- What must A0, A be?
+- How much worse (or better?) does real A0 fit data than estimated A0?
+
+```{r}
+hcl2 <- hclist
+hcl2$A <- with(hcl2, (Q * 0.03 * W^(2/3) * S^(-1/2))^(3/5))
+
+swot_plot(hcl2)
+
+# realA0s <- apply(hcl2$A, 1, min)
+realA0s <- hcl2$A - hcl2$dA
+plot_DAWG(realA0s)
+
+hcl2_A0lms <- estA0_lm(hcl2)
+hcl2_A0ests <- estA0(hcl2)
+
+plot(realA0s, estA0(hcl2))
+
+omegas <- make_omegas(length(realA0s))
+Omegas <- map(omegas, diag)
+
+
+ws35 <- manning_ws35(hcl2)
+lhs_x <- map(Omegas, function(x) t(ws35) %*% x) %>% 
+  Reduce(f = rbind)
+lhs <- lhs_x %*% realA0s
+rhs <- map(omegas, function(x) t(-hcl2$dA * ws35) %*% x) %>% 
+  Reduce(f = c)
+
+plot(lhs, rhs); abline(0, 1)
+
+plot(lhs, predict(hcl2_A0lms))
+```
+
+This should give a perfect fit, and yet it doesn't. Why?
+
+```{r}
+
+omind <- 6
+ws35 <- manning_ws35(hcl2)
+testlhs <- t(ws35) %*% Omegas[[omind]] %*% realA0s
+testrhs <- (t(ws35) * t(hcl2$dA)) %*% -omegas[[omind]]
+
+plot(testlhs, testrhs); abline(0, 1)
+
+
+foo <- with(hcl2, A == (dA + swot_A(A0vec = realA0s, dAmat = dA)))
+plot_DAWG(hcl2$A)
+plot_DAWG(with(hcl2, (dA + swot_A(A0vec = realA0s, dAmat = dA))))
+```
+
+Try again with an updated A0-ndot joint estimate.  But first, revisit Po and Niger estimates.
+
+
+## Po validation, Niger prediction
+
+```{r}
+load("../../airSWOT/cache/est_po.RData")
+load("../../airSWOT/cache/est_niger.RData")
+
+class(est_po)
+library(bamr)
+bam_hydrograph(est_po)
+```
+
+I now have validation data for Po. But it's an excel file with multiple gages listed. Time to look at the raw data?
+
+```{r}
+
+podata <- read_metroman("../../airSWOT/data/Po.txt")
+swot_plot(podata, vars = -1)
+
+head(t(podata$H))
+
+
+foo <- R.matlab::readMat("~/Downloads/gauge_all.mat")
+
+str(foo[[1]])
+str(foo[[1]][[1]][[1]], 1)
+
+
+podsch <- foo[[1]] %>% 
+  map(~.[[1]]) %>% 
+  map(as.data.frame) %>% 
+  map(~setNames(., c("Date", "stage", "level", "depth", "Q", "A"))) %>% 
+  bind_rows(.id = "reach") %>% 
+  transmute(Date = as.Date(Date, origin = "0000-01-01"),
+            Date = Date - 1, reach, 
+            H = level, D = depth, Q, A)
+
+glimpse(podsch)
+```
+
+So I need to figure out which days are represented in the Po data. I have them numbered, but no idea where the numbers reference to, date-wise. 
+
+```{r}
+podsch %>% 
+  ggplot(aes(x = Date, y = Q, color = ))
+```
+
+
+### Revisiting joint A0, ndot estimation
+
+Try to visuialize why things fall apart.
+
+```{r}
+A01 <- estA0(hcl2)
+hcl2$Ahat <- swot_A(A0vec = A01, dAmat = hcl2$dA)
+
+plot_DAWG(manning_ws35(hcl2))
+ndot1 <- swot_vec2mat(manning_ndot(hcl2, Avar = "Ahat"), pattern = hcl2$W)
+plot_DAWG(ndot1)
+
+plot_DAWG(manning_qdot(hcl2))
+plot_DAWG(manning_qdot(hcl2) / ndot1)
+
+A02 <- estA0(hcl2, ndot = ndot1)
+
+ndot2 <- manning_ndot(swotlist = )
+```
+
+I fixed something (make ndot be a matrix), but now things are blowing up in the other direction.
+
+```{r}
+foo <- estA0_ndot(hcl2 %>% swot_sset(keeplocs = 1:6), iters = 100)
+
+foo$Qbarn %>% unlist() %>% plot()
+foo$Qbarn %>% unlist() %>% `/`(0.03) %>% plot(log = "y")
+```
+
+
+```{r}
+hcl2$W %>% apply(1, min)
+```
+
+
+I need to put this in a stan program, probably.
+
+
+I say that weights are 1, -1 because:
+
+- mass is conserved at steady state
+- n does not change in space
+
+But really weights are different. If I knew them perfectly I could get A0. Compare 1, -1 to real weights. 
+
+Also, how does sd(qdot) change as I iteratively change A0?
+
+Things to track as I iterate:
+
+- log-space sd(qdot)
+- log-space mean(A0)
+- log-space mean

@@ -1,0 +1,387 @@
+---
+title: "notebook20180326"
+author: "Mark Hagemann"
+date: "March 26, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Forging ahead with function development, application to Pepsi and lisflood cases. 
+
+- I think I can account for spatial differences in Manning's n when estimating A0. 
+- Finish diagnostics on Manning applicability
+    - with and without steady-state mass conservation
+    - With and without Manning n adjustment
+        - in time and space
+- Be more explicit about swotlist structure
+    - A vs Ahat
+    - Keep separate estimated vs measured parts
+- Come up with consistent naming scheme for funcitons (with eventual packages in mind)
+
+### Manning's n spatial variability adjustment. 
+
+Equation is
+
+$$
+\mathbf{X} \Omega \mathbf{a}_0 = (\mathbf{X \circ} \Delta) \mathbf{\omega}
+$$
+
+This comes from the equation 
+
+$$
+(Qn)^{3/5} = A(W^{-2/3}S^{1/2})^{3/5}
+$$
+
+But suppose n is not constant. Then the equation still holds, but my implementation is wrong if I assume constant n. Being explicit about location, I can write:
+
+$$
+(Q_in_i)^{3/5} = A_i(W_i^{-2/3}S_i^{1/2})^{3/5}
+$$
+
+Now write $n_i = c_i n^*$ such that $c_i$ is the geometric mean of the RHS. Then the following would be equal across locaitons:
+
+$$
+A_i(W_i^{-2/3}S_i^{1/2})^{3/5} \div \text{geomMean}(A_i(W_i^{-2/3}S_i^{1/2})^{3/5})
+$$
+
+But the geomMean is not knowable. Perhaps it could be converged upon? Algorithm would be:
+
+- Estimate A0, assuming steady-state mass conservation and constant n. 
+- Optionally ajdust via ccf_lag
+- Center RHS in log space
+- Repeat until convergence or max number of iterations is reached. 
+
+Cool, at least that's squared away conceptually. I'll push on that this afternoon. Now better to work on Manning applicability and ANOVA
+
+
+### Manning diagnostics using known Q and A
+
+
+```{r}
+swotlist <- reachdata$Platte
+
+manning_lm_linA <- function(swotlist, mc = TRUE) {
+  
+  W <- swotlist$W
+  S <- swotlist$S
+  A <- swotlist$A
+  Q <- swotlist$Q
+  
+  if (mc) {
+    Qvec <- apply(Q, 2, median, na.rm = TRUE)
+    Q <- matrix(rep(Qvec, nrow(Q)), nrow = nrow(Q), byrow = TRUE)
+  }
+  
+  rhs <- as.data.frame(t((W^(-2/3) * S^(1/2))^(3/5)))
+  lhs <- as.data.frame(t(Q^(3/5) / A))
+  
+  dfs <- map2(rhs, lhs, function(x, y) data.frame(x = x, y = y))
+  lms <- map(dfs, ~lm(y ~ 0 + x, data = ., y = TRUE))
+}
+
+manning_R2_linA <- function(swotlist, mc = TRUE) {
+  
+  lms <- manning_lm_linA(swotlist, mc = mc)
+  
+  out <- map_dbl(lms, A0_R2)
+  out
+}
+```
+
+Let's see that in action!
+
+```{r}
+map(reachdata, possibly(~manning_R2_linA(., mc = TRUE), otherwise = NULL)) %>% 
+  map(~data.frame(reach = names(.), R2 = .)) %>% 
+  bind_rows(.id = "case") %>% 
+  ggplot(aes(x = case, y = 1 - R2)) +
+  geom_point() +
+  theme(axis.text = element_text(angle = 90)) +
+  ylim(0, 2) 
+
+map(reachdata, possibly(~manning_R2_linA(., mc = FALSE), otherwise = NULL)) %>% 
+  map(~data.frame(reach = names(.), R2 = .)) %>% 
+  bind_rows(.id = "case") %>% 
+  ggplot(aes(x = case, y = 1 - R2)) +
+  geom_point() +
+  theme(axis.text = element_text(angle = 90)) +
+  ylim(0, 2)
+
+```
+
+It apparently works, but I'm a little stymied about mc toggling results. 
+
+
+```{r}
+manning_lm_log <- function(swotlist, mc = TRUE) {
+  
+  W <- swotlist$W
+  S <- swotlist$S
+  A <- swotlist$A
+  Q <- swotlist$Q
+  
+  if (mc) {
+    Qvec <- apply(Q, 2, median, na.rm = TRUE)
+    Q <- matrix(rep(Qvec, nrow(Q)), nrow = nrow(Q), byrow = TRUE)
+  }
+  
+  rhs <- as.data.frame(t(manning_qdot(W, S, A, log = TRUE)))
+  lhs <- as.data.frame(t(log(Q)))
+  
+  dfs <- map2(rhs, lhs, function(x, y) data.frame(x = x, y = y))
+  lms <- map(dfs, ~lm(y ~ x, data = ., y = TRUE))
+}
+
+manning_R2_log <- function(swotlist, mc = TRUE) {
+  
+  lms <- manning_lm_log(swotlist, mc = mc)
+  
+  out <- map_dbl(lms, A0_R2)
+  out
+}
+```
+
+That was only a slight modification of the previous one. Again, applied to Pepsi:
+
+
+```{r}
+map(reachdata, possibly(~manning_R2_log(., mc = TRUE), otherwise = NULL)) %>% 
+  map(~data.frame(reach = names(.), R2 = .)) %>% 
+  bind_rows(.id = "case") %>% 
+  ggplot(aes(x = case, y = 1 - R2)) +
+  geom_point() +
+  theme(axis.text = element_text(angle = 90))
+
+map(reachdata, possibly(~manning_R2_log(., mc = FALSE), otherwise = NULL)) %>% 
+  map(~data.frame(reach = names(.), R2 = .)) %>% 
+  bind_rows(.id = "case") %>% 
+  ggplot(aes(x = case, y = 1 - R2)) +
+  geom_point() +
+  theme(axis.text = element_text(angle = 90))
+```
+
+OK, that appears fine. Not sure when I'll use this. More useful probably to have some plots. 
+
+- Partial residual plots
+- Prediction vs truth plots
+
+```{r}
+manning_valplot <- function(swotlist, mc = TRUE, plot = TRUE, log = TRUE) {
+  lms <- manning_lm_log(swotlist, mc = mc)
+  names(lms) <- 1:length(lms)
+  valdfs <- map(lms, ~data.frame(true = .$y, pred = predict(.)))
+  valdf <- bind_rows(valdfs, .id = "loc")
+  valdf$loc <- as.factor(as.integer(valdf$loc))
+  
+  if (!log) {
+    valdf$true <- exp(valdf$true)
+    valdf$pred <- exp(valdf$pred)
+  }
+  
+  if (!plot) 
+    return(valdf)
+  
+  out <- ggplot(valdf, aes(x = pred, y = true)) +
+    geom_point(aes(color = loc)) +
+    geom_abline(aes(slope = 1, intercept = 0))
+  out
+}
+
+#' Generate termplots for Manning variables
+#'
+#' Modified from a similar function in 20180312 notebook.
+manning_termplot <- function(swotlist, mc = TRUE, plot = TRUE, scales = "free") {
+  W <- swotlist$W
+  S <- swotlist$S
+  A <- swotlist$A
+  Q <- swotlist$Q
+  
+  if (mc) {
+    Qvec <- apply(Q, 2, median, na.rm = TRUE)
+    Q <- matrix(rep(Qvec, nrow(Q)), nrow = nrow(Q), byrow = TRUE)
+  }
+  
+  fullresids <- log(Q) - manning_qdot(W, S, A, log = TRUE)
+  
+  wresids <- fullresids - 2/3 * log(W)
+  sresids <- fullresids + 1/2 * log(S)
+  aresids <- fullresids + 5/3 * log(A)
+  residlist <- list(W = wresids, S = sresids, A = aresids)
+  
+  datadf <- swotlist[c("W", "S", "A")] %>% 
+    map(log) %>% 
+    swot_tidy() %>% 
+    gather(key = "variable", value = "logval", -time, -loc)
+  residdf <- swot_tidy(residlist) %>% 
+    gather(key = "variable", value = "p_resid", -time, -loc) %>% 
+    left_join(datadf, by = c("variable", "time", "loc")) %>% 
+    group_by(variable) %>% 
+    mutate(p_resid = p_resid - mean(p_resid, na.rm = TRUE)) %>% 
+    ungroup()
+  
+  if (!plot)
+    return(residdf)
+  
+  plotdf <- residdf %>% 
+    group_by(variable) %>% 
+    mutate(meanval = mean(logval, na.rm = TRUE),
+           # meanresid = mean(p_resid, na.rm = TRUE),
+           slope = ifelse(variable == "W", -2/3, 
+                          ifelse(variable == "S", 1/2, 
+                                 ifelse(variable == "A", 5/3, 
+                                        stop("variable not recognized")))),
+           intercept = - slope * meanval,
+           loc = as.factor(as.integer(loc))) 
+  
+  out <- ggplot(plotdf, aes(x = logval, y = p_resid, color = loc)) +
+    geom_point() + 
+    geom_abline(aes(slope = slope, intercept = intercept)) +
+    facet_wrap(~variable, scales = scales)
+  
+  out
+}
+
+manning_termplot(reachdata$Kanawha, mc = TRUE, plot = TRUE, scales = "free_x")
+manning_valplot(reachdata$Kanawha, mc = TRUE, plot = TRUE, log = TRUE)
+manning_valplot(reachdata$Kanawha, mc = TRUE, plot = TRUE, log = FALSE)
+
+```
+
+That looks good. Now put these into lib/
+
+### ANOVA on manning's n
+
+Next step is to package up ANOVA functions. 
+
+- Already have a lib/anova.R script. Just need to add some stuff from the reports/n_anova.Rmd file. 
+- Specifically, make a function that does the ggplot for the depth-dependent Manning's n. 
+
+```{r}
+manning_nplot <- function(swotlist, plot = TRUE) {
+  swotdf <- swot_tidy(swotlist) %>% 
+    mutate(logn = -2/3 * log(W) + 5/3 * log(A) + 1/2 * log(S) - log(Q), 
+           logd = log(A / W),
+           loc = as.factor(loc))
+  
+  if (!plot) 
+    return(swotdf)
+  
+  outgg <- swotdf %>% 
+    ggplot(aes(x = logd, y = logn)) +
+    geom_point(aes(color = loc), size = 0.2) + 
+    stat_smooth(aes(group = loc, color = loc), method = "lm", se = FALSE)
+  outgg
+}
+
+manning_nplot(reachdata$Connecticut)
+head(manning_nplot(reachdata$Connecticut, plot = FALSE))
+```
+
+
+Alright, that's all taken care of. On to the next. 
+
+I should draft a document outlining the inference pipeline. Briefly, I think this would be:
+
+- read in data
+- calculate dA (if necessary)
+- Lag times via ccf_lag
+- Subset locations, e.g. using condition number or A0 R2
+- Iterate:
+    - estimate A0
+    - Estimate ndot
+    
+Partway through this, as well as at the end, diagnostics would be in order, including:
+
+- A0 inference GoF (R2)
+- Condition number
+- dq/dx (estimated)
+
+If validation data are available, the following could also be looked at:
+
+- Manning GoF
+    - in log space
+    - in linear A space
+- ANOVA on Manning n
+- dq/dx 
+- Manning termplots (log space)
+- Manning prediction validation plots (log, linear Q)
+
+
+### Picking up the next day
+
+I tried implementing joint estimation of ndot and A0, but it's blowing up. Testing now.
+
+```{r}
+swotlist$Ahat <- NULL
+ndot <- 1
+ndots <- list()
+qdots <- list()
+
+for (i in 1:iters) {
+  # estimate A0
+  A0hat <- coef(estA0_list(swotlist, ndot = ndot))
+  # A0hat[A0hat < 0] <- 0
+  swotlist$Ahat <- swotlist$dA + swot_vec2mat(A0hat, swotlist$dA)
+  # estimate ndot
+  ndot <- manning_ndot(swotlist, avar = "Ahat", log = FALSE)
+  ndots[[i]] <- log(ndot)
+  qdots[[i]] <- manning_qdot(swotlist$W, swotlist$S, swotlist$Ahat, ndot = ndot, log = FALSE)
+  if (trace) {
+    cat(sprintf("iter: \t%s \nA0: \t%s \nndot: \t%s \n\n", i, 
+                paste(round(A0hat), collapse = "\t"), 
+                paste(round(ndot, digits = 3), collapse = "\t")))
+  }
+}
+```
+
+Inspect. Is difference between locations on qdots changing?
+
+```{r}
+
+# checkdf <- map(ndots, ~swot_tidy(list(dotval = swot_vec2mat(., qdots[[1]])))) %>%
+checkdf <- map(qdots, ~swot_tidy(list(dotval = .))) %>%
+  bind_rows(.id = "iter")
+
+checkdf %>%
+  mutate(iter = as.numeric(iter)) %>% 
+  # glimpse() %>% 
+  group_by(iter, loc) %>% 
+  summarize(meanqdot = mean(dotval, na.rm = TRUE), 
+            q1 = quantile(dotval, 0.25, na.rm = TRUE),
+            q3 = quantile(dotval, 0.75, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  gather(key = stat, value = value, -iter, -loc) %>% 
+  glimpse() %>% 
+  filter(stat == "meanqdot") %>%
+  mutate(loc = as.factor(loc)) %>% 
+  ggplot(aes(x = iter, y = value, color = loc, group = loc)) +
+  geom_point()
+                
+```
+
+
+I need to investigate this further. Make sure it's behaving as intended:
+
+- initialize ndot to be 1. 
+- estimate A0, conditional on ndot
+- estimate ndot
+
+
+What do I expect to happen as I iterate?
+
+- qdots get closer together
+
+```{r}
+qdots %>% 
+  map(~apply(., 1, function(x) mean(log(x), na.rm = TRUE))) %>% 
+  as.data.frame() %>% 
+  unname() %>% 
+  as.matrix() %>% 
+  t()
+```
+
+OK, so it's working as expected! It just blows up. I'll probably have to regularize if I want it to work at all. For now work on prep for skype with Mike.

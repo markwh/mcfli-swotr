@@ -1,0 +1,241 @@
+---
+title: "notebook20180411"
+author: "Mark Hagemann"
+date: "April 11, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Again, decomposing closure term, describing its structure. I now want to know what flow imbalance looks like over time and space. 
+
+```{r}
+reachdata$MississippiDownstream$W %>% dim()
+
+map_int(reachdata, ~nrow(.$W)) %>% sort()
+
+```
+
+Do I have a function to get flow imbalance? Jeez, I need to re-inventory my functions. 
+
+```{r}
+# Call it gamma because that's what I have in my notebook.
+swot_gamma <- function(swotlist) {
+  Qmat <- swotlist$Q
+  gmeans <- apply(Qmat, 2, geomMean)
+  out <- Qmat / swot_vec2mat(gmeans, Qmat)
+  out
+}
+
+caseq <- reachdata$Tanana
+
+plot_DAWG(swot_gamma(caseq) %>% log())
+plot_DAWG(swot_gamma(caseq))
+plot_DAWG(caseq$Q %>% log())
+
+corq <- swot_gamma(caseq) %>% 
+  log() %>% 
+  t() %>% 
+  cor()
+
+nq <- nrow(corq)
+plot.ts(corq[, c(floor(nq / 2), ceiling(nq / 2))])
+
+```
+
+Cool! Now look at timeseries structure. This will be less important for real SWOT data, but it is very important for daily data. 
+
+```{r}
+acfdatq <- swot_gamma(caseq) %>% 
+  log() %>% 
+  t() %>% 
+  scale()
+
+acf(acfdatq[, 3])
+pacf(acfdatq[, 3])
+
+arimas <- map(as.data.frame(acfdatq), ~arima(., c(2, 0, 0)))
+map(arimas, tidy) %>% 
+  bind_rows(.id = "loc") %>% 
+  ggplot(aes(x = term, y = estimate, color = loc)) +
+  geom_point()
+
+```
+
+
+Should I write a swot_decompose_Q function? This would pull apart in log space. Possibly also do some timeseries modeling. I could do the same for n. 
+
+
+## Start of a closure structure writeup
+
+Transferring stuff here from reports/ because I'm realizing I don't have the theory ironed out enough. 
+
+
+In a previous document I decomposed the variability of flow resistance (Manning's n) in time and space using Pepsi 1 cases. In this docoument I will explore that idea further, expanding it to include components of flow imbalance. These two quantities--flow imbalance and Manning n variability--constitute the closure term for Mass-conserved Manning's equation as used to infer $A_0$. 
+
+## Model
+
+Mass-conserved Manning (McMan) assumes the following relationship holds:
+
+$$
+A_{it} X_{it} = A_{it} (W_{it}^{-2/3} S_{it}^{1/2})^{3/5} =  nQ_t
+$$
+
+Departures from this relationship can arise from the following conditions:
+
+- Flow resistance, $n$, varies in time and/or space. Spatial variability can come from change in bed material between reaches; time variability can come from interdependence between stream depth and flow resistance. 
+- Spatial variability in $Q_t$ arising from non-steady-state flow conditions.
+- Lateral influx/outflux of water resulting in non-mass-conserved conditions.
+- Invalidity of Manning's equation assumptions. 
+
+Note that these do not account for other sources of error such as measurement or parameter uncertainty. 
+
+In order to account for these departures, instead write the true equality as
+
+$$
+A_{it} X_{it} =  n_{it}Q_{it} = (\nu_{it} \gamma_{it})\bar{n}\bar{Q}_t 
+$$
+
+where $\gamma_{it} = Q_{it} / \bar{Q}$ represents flow variability and $\nu_{it} = n_{it} / \bar{n}$ represents all other sources of multiplicative error. $\bar{n}$ and $\bar{Q}_t$ can be computed variously from $n_{it}$ and $Q_{it}$, but the most natural choice is the geometric mean, ensuring that $\nu$ and $\gamma$ both have geometric mean of 1. 
+
+Since $\gamma_{it}$ is comprised prinicpally from flow imbalance due to non-steady-state conditions, the time series it contains will be highly correlated in space. Furthermore, the reach containing the mean location along the river section will have $\gamma_t$ close to zero, and the magnitude of $\gamma_t$ will increase further upstream and downstream from this middle reach. Reaches downstream of the middle reach will have $\gamma$ time series that are positively correlated with one another and negatively correlated those upstream of the middle reach. The time-series structure of $\gamma$ is likely to be negligible at SWOT overpass time scales, but significant at approximately daily time scales. An example of this structure can be seen in the following subset of the Po River data. 
+
+```{r}
+reachdata$Po %>% 
+  # swot_sset(keeptimes = 100:120) %>% 
+  swot_gamma() %>% 
+  plot_DAWG() +
+  scale_y_log10() +
+  xlim(100, 120) +
+  # ylim(0.8, 1.2) +
+  ylab("gamma") +
+  theme_bw()
+```
+
+Since $\gamma$ is a multiplicative term, it can be modeled in log space as
+
+$$
+\ln \gamma_{it} = \tau_i \ln [\bar{\gamma_{\cdot t}}] + \epsilon_{it}
+$$
+
+
+```{r}
+casei <- reachdata$Po
+
+gami <- casei %>% 
+  swot_gamma() %>% 
+  log()
+
+plot_DAWG(gami)
+
+disti <- casei$x - mean(casei$x)
+  
+
+gami_adj <- gami / disti
+
+gamdot <- apply(gami_adj, 2, mean) # "characteristic" departure from Qbar
+plot(gamdot, type = "l")
+
+plot_DAWG(gami_adj - swot_vec2mat(gamdot, gami_adj)) # Still not great in terms of error structure
+
+# Shouldn't error structure of *that* be location-dependent?
+
+gamdep2 <- gami_adj - swot_vec2mat(gamdot, gami_adj)
+
+qqnorm(as.vector(gamdep2) * abs(as.vector(disti)))
+qqnorm(as.vector(gamdep2))
+```
+
+Error goes in opposite direction from what I anticipated. But error is still pretty small, comparatively. 
+
+
+Now I'm starting to think about this as wave structure. Can I simulate an AR(2) process that does this?
+
+```{r}
+ar1 <- 0.999
+ar2 <- -0.001
+# foo <- arima.sim(list(ar = c(ar1, ar2)), n = 100, sd = 0.3)
+
+foo <- arima.sim(list(order = c(2, 1, 0), ar = c(0.3, -0.5)), n = 1000)
+  # `+`(100) %>% 
+  # exp()
+
+plot(foo)
+points(foo)
+```
+
+That may not be the right approach. Consider for a given time that dQ/dx is mostly constant in space, but with some variability. 
+
+Can I consider flow to be a time-series in space? Problem is irregular sampling. 
+
+```{r}
+dim(profs2$Q)
+profs2$Q[100, ] %>% 
+  as.vector() %>% 
+  plot()
+
+xsdata$Po$Q %>% dim()
+plot_DAWG(xsdata$Po$Q)
+plot_DAWG(swot_gamma(xsdata$Po))
+
+xsdata$Po$X %>% plot()
+```
+
+Not perfectly even, but good enough. 
+
+Now calculate dgamma/dx. But do this in log space. Right?
+
+```{r}
+dg <- apply(log(xsdata$Po$Q), 2, diff)
+dx <- swot_vec2mat(diff(xsdata$Po$X), dg)
+
+
+plot_DAWG(dg / dx)
+
+meandgdx <- apply(dg / dx, 2, mean)
+
+gdot <- dg / dx - meandgdx
+plot_DAWG(gdot)
+
+plot(gdot[, 10], type = "b")
+
+acf(gdot[, 10])
+pacf(gdot[, 10])
+
+
+```
+
+HOw well does an ARIMA(1, 2, 0) work?
+
+```{r}
+foo <- arima.sim(list(order = c(1, 2, 0), ar = c(0.02)), n = 1000, sd = 0.01)
+plot(foo)
+```
+
+No. But since dA/dt = dQ/dx, I should be able to simulate using flow timeseries.
+
+```{r}
+foots <- profs %>% 
+  filter(loc == 50) %>% 
+  glimpse() %>% 
+  `[[`("Q")
+plot(foots)
+
+lfts <- log(foots)
+plot(lfts)
+
+acf(lfts)
+pacf(lfts)
+
+fooar3 <- arima(log(foots), order = c(1, 2, 0))
+fooar3
+plot(arima.sim(fooar3, n = 100))
+
+```
+
+
+I think that while time series modeling may work for Pepsi cases and SWOT data, it is not the right approach for the lisflood cases. Ther are simply not enough times for the time series to be considered stationary. And resolution is way to high. But I also know true flow variability in time. 
+
+

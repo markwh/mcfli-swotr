@@ -1,0 +1,177 @@
+---
+title: "A' variance"
+date: "May 18, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+```
+
+
+The variance of A' takes the following form when slope is known:
+
+$$
+Var(A') = 4 \mu_* ^2 \sigma_* ^ 2 + 2 \sigma_*^4
+$$
+
+where $\mu_* = \sqrt{\frac{p}{2}} (H - H_1) + \frac{W_1}{\sqrt{2p}}$ and $\sigma_*^2 = \frac{p}{2} \sigma^2_H$.
+
+This assumes normality of H error.
+
+
+## Unknown slope, $p$
+
+If slope is unknown, then further approximation is required. Depending on the magnitude of uncertainty reltive to actual slope, one of two different approximations are used. 
+
+The general form for variance of A' is:
+
+$$
+Var(A') = 4 \mu_* ^2 \sigma_* ^ 2 + 2 \sigma_*^4 + \frac{W_1}{4} \sigma^2_{1/p}
+$$
+
+where $\sigma_{1/p}$ is the standard deviation of error in 1/p, when estimated using error-in-variables regression, and:
+
+$$
+\mu_* = \frac{H - H_1}{\sqrt{2}}\mu_1 + \frac{W_1}{\sqrt{2}}\mu_2
+$$
+
+and 
+
+$$
+\sigma_*^2 = \frac{p}{2} \sigma_H^2 + \frac{(H - H_1)^2}{2} \sigma_1^2 + \frac{W_1^2}{2} \sigma^2_2
+$$
+
+The formulae for $\mu_1, \mu_2, \sigma_1$, and $\sigma_2$ are approximations, and differ depending on relative magnitudes of $\sigma_p$ and $\sigma_{1/p}$. They are as follows:
+
+$$
+\begin{aligned}
+\mu_1 &= \sqrt{p} &, \text{ if } \sigma_p < p\\
+&= .8222(\sigma_p^2 + p^2)^{1/4} &, \text{ if } \sigma_p > p
+\end{aligned}
+$$
+
+$$
+\begin{aligned}
+\mu_2 &= \sqrt{1/p}&, \text{ if } \sigma_{1/p} < \frac{1}{p}\\
+&= 0.8222 (\sigma_{1/p}^2 + 1/p^2)^{1/4}&, \text{ if } \sigma_{1/p} > \frac{1}{p}
+\end{aligned}
+$$
+
+$$
+\begin{aligned}
+\sigma^2_1 &= p\Big(\exp(\sigma^2_p / (2 p^2)) - \exp(\sigma^2_p / (4 p^2))\Big)&, \text{ if } \sigma_p < p\\
+&= 0.1219 \sqrt{\sigma_p^2 + p^2}&, \text{ if } \sigma_p > p
+\end{aligned}
+$$
+
+
+$$
+\begin{aligned}
+\sigma^2_2 &= \frac{1}{p}\Big(\exp(p^2\sigma^2_{1/p} / 2) - \exp(p^2\sigma^2_p / 4)\Big)&, \text{ if } \sigma_{1/p} < \frac{1}{p}\\
+&= 0.1219\sqrt{\sigma_{1/p}^2 + 1/p^2}&, \text{ if } \sigma_{1/p} > \frac{1}{p}
+\end{aligned}
+$$
+
+### Validation of Approximations
+
+Here is a plot illustrating the two different approximations for $\sigma_1^2$:
+
+
+```{r}
+approxvar1 <- function(p, sigma_p) {
+  
+  expbit <- exp(sigma_p^2 / (4 * p^2))
+  out <- (expbit - 1) * expbit * p
+  out
+}
+
+approxvar2 <- function(p, sigma_p) {
+  
+  newsigma <- sqrt(sigma_p^2 + p^2)
+  newsigma * 0.1219
+}
+
+
+p <- 2
+cvs <- 10^seq(-2, 1.5, length.out = 21)
+sigmas <- cvs * p
+simvars <- map(sigmas, ~abs(rnorm(10000, p, .))) %>% 
+  map_dbl(~var(sqrt(.)))
+
+# simvars <- simcvs * p^2
+
+valdf <- data.frame(p = p, sigma_p = sigmas, cv = cvs, 
+                    sim_var = simvars) %>% 
+  mutate(approx1 = approxvar1(p, sigma_p),
+         approx2 = approxvar2(p, sigma_p))
+
+ggplot(valdf, aes(x = cv, y = sim_var)) +
+  geom_point(aes(shape = "empirical")) +
+  geom_line(aes(y = approx1, color = "approx1")) +
+  geom_line(aes(y = approx2, color = "approx2")) +
+  # ylim(0, max(valdf$sim_var * 1.5)) +
+  scale_x_log10(breaks = 10^(-2:1),
+                labels = 10^(-2:1)) +
+  scale_y_log10(limits = c(min(valdf$sim_var) / 2,
+                           max(valdf$sim_var * 1.5))) +
+  annotation_logticks() +
+  xlab("Coefficient of Variation") +
+  ylab("Variance") +
+  theme_bw() +
+  theme(legend.title = element_blank())
+  
+```
+
+Here is a plot illustrating the two different approximations for $\mu_1$:
+
+```{r}
+approxmean1 <- function(p, sigma_p) {
+  # expbit <- p^(1/2) * exp(sigma_p^2 / (8 * p^2))
+  # out <- expbit
+  sqrt(p)
+  # out
+}
+
+approxmean2 <- function(p, sigma_p) {
+  newsigsq <- sigma_p^2 + p^2
+  # out <- sqrt(2 / pi * newsigsq)
+  
+  out <- 0.8222 * newsigsq^(1/4)
+  out
+}
+
+
+p <- 5
+cvs <- 10^seq(-2, 1.5, length.out = 21)
+sigmas <- cvs * p
+simmeans <- map(sigmas, ~abs(rnorm(10000, p, .))) %>% 
+  map_dbl(~mean(sqrt(.)))
+
+# simvars <- simcvs * p^2
+
+valdf <- data.frame(p = p, sigma_p = sigmas, cv = cvs, 
+                    sim_mean = simmeans) %>% 
+  mutate(approx1 = approxmean1(p, sigma_p),
+         approx2 = approxmean2(p, sigma_p))
+
+ggplot(valdf, aes(x = cv, y = sim_mean)) +
+  geom_point(aes(shape = "empirical")) +
+  geom_line(aes(y = approx1, color = "approx1")) +
+  geom_line(aes(y = approx2, color = "approx2")) +
+  # ylim(0, max(valdf$sim_mean * 1.5)) +
+  scale_x_log10(breaks = 10^(-2:1),
+                labels = 10^(-2:1)) +
+  scale_y_log10(limits = c(min(valdf$sim_mean) / 2,
+                           max(valdf$sim_mean * 1.5))) +
+  annotation_logticks() +
+  xlab("Coefficient of Variation") +
+  ylab("Mean") +
+  theme_bw() +
+  theme(legend.title = element_blank())
+  
+```
+

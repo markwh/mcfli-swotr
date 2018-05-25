@@ -1,0 +1,257 @@
+---
+title: "Flow Imbalance"
+author: "Mark Hagemann"
+date: "April 10, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Mass conservation can be imposed in a couple of different ways. The easy way assumes the river is at quasi-steady state, in which case $\frac{\partial Q}{\partial x} = 0$ is a good approximation. The hard way is harder, but more correct. $\frac{\partial Q}{\partial x} = \frac{\partial A}{\partial t}$. If steady-state is a bad assumption, can we approximate the flow difference in space using the area difference in time? In this endeavor we are limited by the coarse spatial resolution of SWOT observations, meaning that any estimate of $\frac{\partial A}{\partial t}$ via $\frac{\Delta A}{\Delta t}$ is a crude approximation. How crude?
+
+In this document I will be investigating the validitiy of the approximation $\frac{\Delta Q}{\Delta x} = \frac{\Delta A}{\Delta t}$ using Pepsi 1 and lisflood datasets. The former have daily time resolution--much higher than SWOT will actually achieve--as well as perfect simulated geometry and flow at high spatial resolution cross sections. This, and the aggregated reaches, will allow exploration of the equality in question for a number of spatial and temporal resolutions. 
+
+## First, lisflood. 
+
+```{r}
+profs <- lis_profiles("../lisflood/toy_1/results_simple_v2/") %>% 
+  filter(time > 23,  # Omit spin-up
+         ChanX < 30001) %>% 
+  transmute(Q = Flow, H = WaterElev, D = WaterDepth, W = Width,
+            time_s = 3600 * time, x = ChanX, 
+            time = as.numeric(as.factor(time_s)),
+            loc = as.numeric(as.factor(ChanX)))
+glimpse(profs)
+
+profs2 <- swot_untidy(profs)
+profs2$dA <- with(profs2, calcdA_mat(w = W, h = H, zero = "minimum"))
+
+
+swot_plot(profs2) +
+  theme(legend.position = "none")
+
+```
+
+
+Now calculate dA, dx, dQ, dt, ratios. 
+
+```{r}
+dA <- t(apply(profs2$dA, 1, diff))
+dt <- t(apply(profs2$time_s, 1, diff))
+dQ <- -apply(profs2$Q, 2, diff)
+dx <- apply(profs2$x, 2, diff)
+
+# Apply centered euler method (take mean of forward and backward)
+dA <- (dA[-1, ] + dA[-nrow(dA), ]) / 2
+dt <- (dt[-1, ] + dt[-nrow(dt), ]) / 2
+dQ <- (dQ[, -1] + dQ[, -ncol(dQ)]) / 2
+dx <- (dx[, -1] + dx[, -ncol(dx)]) / 2
+
+
+dadt <- dA / dt
+dqdx <- dQ / dx
+
+
+```
+
+Now compare!
+
+```{r}
+plot(as.vector(dadt), as.vector(dqdx))
+abline(0, 1)
+```
+
+Very close! But not perfect. Next: experiment with different time and space resolution, code up a streamlined function for doing this analysis on swotlists. 
+
+```{r}
+
+
+# This swotlist must have *matrices* for time (seconds) and location (meters).
+swot_massbal <- function(swotlist) {
+  
+  if (is.null(swotlist$time_s))
+    swotlist$time_s <- swotlist$t * 3600 * 24
+  
+  dA <- t(apply(swotlist$dA, 1, diff))
+  dt <- t(apply(swotlist$time_s, 1, diff))
+  dQ <- apply(swotlist$Q, 2, diff)
+  dx <- apply(swotlist$x, 2, diff)
+  
+  # Apply centered euler method (take mean of forward and backward)
+  dA <- (dA[-1, ] + dA[-nrow(dA), ]) / 2
+  dt <- (dt[-1, ] + dt[-nrow(dt), ]) / 2
+  dQ <- (dQ[, -1] + dQ[, -ncol(dQ)]) / 2
+  dx <- (dx[, -1] + dx[, -ncol(dx)]) / 2
+  
+  outlist <- list(dA = dA, dt = dt, dQ = dQ, dx = dx)
+  
+  outdf <- swot_tidy(outlist)
+  outdf
+}
+
+swot_mbplot <- function(swotlist, plot = TRUE) {
+  plotdf <- swot_massbal(swotlist) %>% 
+    mutate(dadt = dA / dt,
+           dqdx = -dQ / dx)
+  
+  if (!plot)
+    return(plotdf)
+  
+  out <- plotdf %>% 
+    ggplot(aes(x = dadt, y = dqdx, color = loc)) +
+    geom_point() + 
+    geom_abline(aes(slope = 1, intercept = 0))
+  out
+}
+
+swot_mbplot(profs2)
+```
+
+Now it should be easy to subset and replot. Leave aside the question of reach-averaging for now. 
+
+```{r}
+
+byti <- 10
+byli <- 10000 / 200
+ktsi <- seq(from = 1, to = ncol(profs2$W), by = byti)
+klsi <- seq(from = 1, to = nrow(profs2$W), by = byli)
+
+profs2 %>% 
+  swot_sset(keeptimes = ktsi, keeplocs = klsi) %>% 
+  swot_mbplot()
+```
+
+Cool! Now try for Pepsi cases. 
+
+First need to add time and location data to cached swotlist. 
+
+- OK, that's done. Might break some earlier scripts, but should be easy to fix. 
+
+```{r}
+
+reachdata$Connecticut %>% 
+  swot_mbplot()
+
+reachdata$Cumberland %>% 
+  swot_mbplot()
+
+```
+
+Look at all of them!
+
+```{r}
+
+notthese <- which(names(reachdata) %in% c("StLawrenceDownstream", 
+                                          "StLawrenceUpstream", 
+                                          "Tanana"))
+
+reachdata %>% 
+  `[`(-notthese) %>% 
+  map(swot_mbplot, plot = FALSE) %>% 
+  bind_rows(.id = "case") %>% 
+  glimpse() %>% 
+  ggplot(aes(x = dadt, y = dqdx, color = loc)) +
+  geom_point() + 
+  geom_abline(aes(slope = 1, intercept = 0)) +
+  facet_wrap(~case, scales = "free")
+
+```
+
+How's that look when I sample every 7 days?
+
+```{r}
+
+reachdata %>% 
+  `[`(-notthese) %>% 
+  map(~swot_sset(., keeptimes = which(1:ncol(.$W) %% 7 == 0))) %>% 
+  map(swot_mbplot, plot = FALSE) %>% 
+  bind_rows(.id = "case") %>% 
+  glimpse() %>% 
+  ggplot(aes(x = dadt, y = dqdx, color = loc)) +
+  geom_point() + 
+  geom_abline(aes(slope = 1, intercept = 0)) +
+  facet_wrap(~case, scales = "free")
+```
+
+Put this into a metric. 
+
+```{r}
+
+pepmbdf <- reachdata %>% 
+  `[`(-notthese) %>% 
+  map(~swot_sset(., keeptimes = which(1:ncol(.$W) %% 1 == 0))) %>% 
+  map(swot_mbplot, plot = FALSE) %>% 
+  bind_rows(.id = "case") %>% 
+  glimpse()
+
+pepmbdf %>% 
+  group_by(case) %>% 
+  summarize(rrmse = RRMSE(pred = dadt, meas = dqdx))
+```
+
+
+```{r}
+swot_mbplot(reachdata$MississippiDownstream)
+foo <- swot_mbplot(reachdata$MississippiDownstream, plot = FALSE)
+
+RRMSE(pred = foo$dadt, meas = foo$dqdx)
+
+bar <- with(foo, dadt - dqdx)
+
+plot(bar)
+
+plot(foo$dqdx)
+
+quantile(bar / foo$dqdx, c(0.2, 0.5, 0.8, 0.9, 0.99, 0.999))
+
+mean(bar^2)
+mean(bar^2 / foo$dqdx^2)
+```
+
+Because of outliers, I need to use a nonparametric statistic. Like MARE.
+
+```{r}
+MARE <- function(pred, meas) {
+  absrelerrs <- abs((pred - meas) / meas)
+  out <- median(absrelerrs)
+  out
+}
+
+pepmbdf %>% 
+  group_by(case) %>% 
+  summarize(mare = MARE(pred = dadt, meas = dqdx))
+```
+
+Now repeat for time sampling of 1:15 and plot. 
+
+```{r}
+
+mbdfs <- list()
+
+for (i in 1:15) {
+  cat(i, " ")
+  pepmbdfi <- reachdata %>% 
+    `[`(-notthese) %>% 
+    map(~swot_sset(., keeptimes = which(1:ncol(.$W) %% i == 0))) %>% 
+    map(possibly(~swot_mbplot(., plot = FALSE), otherwise = NULL)) %>% 
+    bind_rows(.id = "case")
+  mbdfs[[i]] <- pepmbdfi
+}
+
+allpepmb <- mbdfs %>% 
+  bind_rows(.id = "ndays") %>% 
+  mutate(ndays = as.numeric(ndays)) %>% 
+  group_by(ndays, case) %>% 
+  summarize(mare_pct = MARE(pred = dadt, meas = dqdx) * 100) %>% 
+  ungroup()
+
+allpepmb %>% 
+  ggplot(aes(x = ndays, y = mare_pct, group = case, color = case)) +
+  geom_point() +
+  geom_line() + 
+  theme_bw()
+
+```
+

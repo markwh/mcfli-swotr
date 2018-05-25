@@ -1,0 +1,270 @@
+---
+title: "notebook20180409"
+author: "Mark Hagemann"
+date: "April 9, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Recall work last week/weekend:
+
+- Calculated real WS matrix
+    - I did a few iterations of this, but settled on a version that matches the time-varying mean of a supplied estimate
+    - Resulted in closure term
+- Did for-real inversions of 2x2 cases. Still need to document this.
+- Took some time coming up with additive error term in linA space. Struggled for a while, but ended up with some working functions. 
+- Brushed up on error-in-variable model theory (VCU library)
+    - McMan model is very complicated! Errors highly interdependent! 
+    - TODO: tease out these dependencies
+- Finally, did simulation of effects of error magnitude on A0 performance
+    - Need to document the resulting functions and put them into lib/ DONE.
+    
+Picking up from weekend work. 
+
+- Simulation of error, evaluation
+- Repeat for unsteady case
+- Repeat for Pepsi cases
+- Test hypothesis that standard error of parameter estimates is a good predictor of performance. 
+- Document this process of calculating closure, considering McMan as a error-in-variables model
+
+## Error simulation for unsteady case
+
+- Recreate steady-case simulation from weekend.
+- See if I can represent in relative terms. 
+    - Transform columns to have zero mean? Then I can represent error as ratio of variances. 
+
+
+Read in case. 
+
+
+```{r}
+uscase <- lis_profiles("../lisflood/toy_1/results_simple_v2/") %>% 
+  lis_reaches(slope_method = "s_mean", agfun = mean) %>% 
+  filter(loc != 4) %>%
+  mutate(A = W * D) %>% 
+  swot_untidy() %>% 
+  swot_sset(keeptimes = -1:-20)
+```
+
+
+```{r}
+# casei <- uscase
+casei <- shiftcase
+simsds <- 10^seq(-8, -2, length.out = 20) %>% 
+  rep(each = 100)
+
+nx <- nrow(casei$W)
+nt <- ncol(casei$W)
+
+simerrmats <- map(simsds, ~rnorm(nx * nt, 0, .)) %>% 
+  map(~matrix(., nrow = nx, ncol = nt))
+simwsmats <- map(simerrmats, ~(manning_linA_closed(casei) + .))
+
+simA0ests <- map(simwsmats, ~estA0_lm_ws35(., dAmat = casei$dA)) %>% 
+  map(~as.data.frame(as.list(coef(.)))) %>% 
+  bind_rows(.id = "simno")
+
+trueA0df <- data.frame(loc = c("x1", "x2", "x3"), A0true = c(101.95, 119.92, 99.97))
+
+simoutdf <- simA0ests %>% 
+  mutate(sd = simsds) %>% 
+  select(-simno) %>% 
+  gather(key = "loc", value = "A0est", -sd) %>% 
+  left_join(trueA0df, by = c("loc")) %>% 
+  mutate(relerr_pct = (A0true - A0est) / A0true * 100)
+```
+
+Now plug in observed errors and plot. 
+
+```{r}
+valdf <- data.frame(loc = c("x1", "x2", "x3"),
+                    sd = apply(manning_linA_closure(casei), 1, sd),
+                    A0est = estA0(casei)) %>% 
+  left_join(trueA0df, by = "loc") %>% 
+  mutate(relerr_pct = (A0true - A0est) / A0true * 100,
+         # sd = sqrt(mean(sd^2)),  # Optional, to aggregate sd across locations.
+         absrelerr = abs(relerr_pct))
+
+hist(manning_linA_closure(swotlist = casei))
+qqnorm(manning_linA_closure(swotlist = casei))
+
+simoutdf %>% glimpse() %>% 
+  mutate(absrelerr = abs(relerr_pct)) %>% 
+  # ggplot(aes(x = sd, y = relerr_pct)) +
+  ggplot(aes(x = sd, y = absrelerr)) +
+  geom_point() +
+  geom_point(data = valdf, color = "red", size = 5) +
+  scale_y_log10() +
+  scale_x_log10() +
+  theme_bw()
+```
+
+So not a perfect simulation of error effects. Is it because of structure within errors?
+
+```{r}
+manning_linA_closure(casei) %>% 
+  t() %>% 
+  pairs()
+
+manning_linA_closure(casei) %>% 
+  # t() %>% summary()
+  plot_DAWG()
+
+(manning_linA_closure(casei) * casei$A) %>% 
+  # t() %>% summary()
+  plot_DAWG()
+
+```
+
+Likely so. I can repeat this for shifted case. 
+
+```{r}
+shiftcase <- swot_timelag(uscase, lags = c(0, -2, -4))
+estA0(shiftcase)
+casei <- shiftcase
+```
+
+Hmm. It seems I should be treating the sd differently. No, that didn't fix things either. 
+
+So my simulation is not a great portrayal of impact of error magnitude on A0 inversion error. Table this for now. Work on:
+
+- Pepsi cases estimate standard error vs A0 error plot. 
+- Document closure, considering McMan as a error-in-variables model
+
+## Pepsi cases coef standard error vs A0 error
+
+```{r}
+
+badinds <- which(names(reachdata) %in% 
+                   c("StLawrenceDownstream", "StLawrenceUpstream", "Tanana"))
+
+rd2 <- reachdata[-badinds] %>% 
+  map(ccf_lag, Ahat = FALSE) %>% 
+  map(function(x) {x$dA <- rezero_dA(x$dA, zero = "median"); x})
+
+closures <- map(rd2, manning_closure)
+
+peplms <- rd2 %>% 
+  map(possibly(~estA0_lm(., ndot = 1), otherwise = NA))
+  # map2(closures, possibly(~estA0_lm(.x, ndot = .y), otherwise = NA))
+
+pepsmrys <- map(peplms[!is.na(peplms)], summary)
+pepcoefdf <- map(pepsmrys, tidy) %>% 
+  map(~mutate(as.data.frame(.), loc = paste0("x", 1:nrow(.)))) %>% 
+  bind_rows(.id = "case")
+
+trueA0s <- map(rd2, ~apply(.[["A"]], 1, median)) %>% 
+  map(~data.frame(loc = paste0("x", 1:length(.)), A0 = .)) %>% 
+  bind_rows(.id = "case")
+
+pepcoefdf %>% 
+  left_join(trueA0s, by = c("loc", "case")) %>% 
+  mutate(relerr_pct = (estimate - A0) / A0 * 100) %>% 
+  ggplot(aes(x = std.error, y = relerr_pct, color = case)) +
+  geom_point()
+  
+```
+
+nothing I'd hang my hat on. 
+
+
+## Notes on CRSC - Measurement Error in Nonlinear Models
+
+### Chapter 1 - Introduction
+
+Classical measurement error model:
+
+$$
+W_{ij} = X_{ij} + U_{ij}
+$$
+- W is measured
+- X is true
+- U is error
+    - $E[U_{ij} | X_{ij}] = 0$ 
+    - No assumption on heteroscedasticity
+
+Note: observed has larger variance than truth
+
+- Contrast to **Berkson Measurement Error Model**: 
+    - $X_{ij} = W_{ij} + U_{ij}$
+    - $E[U_{ij} | W_{ij}] = 0$
+    - Here truth is more variable than observed. 
+    - Has more statistical power than classical. 
+
+Extensions include adding bias, variance components:
+
+$$
+W_{ij} = \gamma_0 + \gamma_1X_{ij} + U_{ij} \\
+U_{ij} = r_i + \epsilon_{ij} 
+$$
+
+
+### Chapter 2 - Important concepts
+
+Functional vs structural models
+
+- Functional: X_i's are fixed unknown parameters
+    - Or random, but without a specified distribution or distributional parameters
+- Structural: X_i's are random variables
+
+Differential vs nondifferential errors
+
+- Nondifferential: [Y|W, X] only depends on W through X. W is a *surrogate*. i.e. Y|X is indep. of W. 
+- Differential if otherwise. e.g.:
+    - If U is dependent on response errors, then it's differential. 
+
+### Chapter 3 - Linear regression
+
+Check out the following cited references:
+
+- Hasenabeldy, Fuller, and Ware (1988): Indoor Air Pollution and pulmonary performance: investigating errors in exposure assessment. Statistics in Medicine, 8, 1109-1126.
+- Hwang, J.T. (1986) Multiplicative errors in variables models with applications to the recent data released by the U.S. Department of Energy. Journal of the American Statistical Association, 81, 680-688.
+
+
+
+## Relative errors using Pepsi
+
+What do I want here? Something similar to the above, but x axis should be ratio of (variance of U) to (variance of X). Or I could simply use the magnitude of 1 / ndot. Call this alpha. 
+
+```{r}
+
+badinds <- which(names(reachdata) %in% 
+                   c("StLawrenceDownstream", "StLawrenceUpstream", "Tanana"))
+
+rd2 <- reachdata[-badinds] %>% 
+  map(ccf_lag, Ahat = FALSE) %>% 
+  map(function(x) {x$dA <- rezero_dA(x$dA, zero = "median"); x})
+
+closures <- map(rd2, manning_closure)
+alphas <- map(closures, ~(geomMean(.) / .))
+
+peplogsds <- map_dbl(alphas, ~sd(log(.)))
+
+pepsddf <- data.frame(case = names(peplogsds), sdlog = peplogsds)
+
+peplms <- rd2 %>% 
+  map(possibly(~estA0_lm(., ndot = 1), otherwise = NA))
+  # map2(closures, possibly(~estA0_lm(.x, ndot = .y), otherwise = NA))
+
+pepsmrys <- map(peplms[!is.na(peplms)], summary)
+pepcoefdf <- map(pepsmrys, tidy) %>% 
+  map(~mutate(as.data.frame(.), loc = paste0("x", 1:nrow(.)))) %>% 
+  bind_rows(.id = "case")
+
+trueA0s <- map(rd2, ~apply(.[["A"]], 1, median)) %>% 
+  map(~data.frame(loc = paste0("x", 1:length(.)), A0 = .)) %>% 
+  bind_rows(.id = "case")
+
+pepcoefdf %>% 
+  left_join(trueA0s, by = c("loc", "case")) %>% 
+  mutate(relerr_pct = (estimate - A0) / A0 * 100) %>% 
+  left_join(pepsddf, by = "case") %>% 
+  ggplot(aes(x = sdlog, y = relerr_pct, color = case)) +
+  geom_point()
+  
+```
+

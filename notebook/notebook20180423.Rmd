@@ -1,0 +1,318 @@
+---
+title: "notebook20180423"
+author: "Mark Hagemann"
+date: "April 23, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+First, check out Steve's issue. 
+
+```{r}
+stevedata <- readRDS("../data/steve/BAMData.rds")
+steveest <- readRDS("../data/steve/BAMestimate.rds")
+
+library(rstan)
+```
+
+```{r}
+lq6 <- extract(steveest, "logQ[6]")
+
+str(lq6, 1)
+plot(lq6[[1]] %>% exp())
+```
+
+Look at Q vs. manning params for this case. 
+
+```{r}
+plot_DAWG(stevedata$dAobs)
+
+A0samps <- extract(steveest, "A0")
+head(A0samps[[1]])
+
+summary(steveest)
+
+Asamps <- A0samps[[1]] %>% 
+  split(1:nrow(.)) %>% 
+  map(function(x) stevedata$dAobs + swot_vec2mat(x, stevedata$dAobs))
+
+A6samps <- map(Asamps, function(x) x[, 6])
+
+lognsamps <- extract(steveest, "logn")
+
+plot(lognsamps[[1]])
+
+lognsamps_list <- lognsamps[[1]] %>% 
+  split(1:nrow(.))
+
+awssamps <- Asamps %>% 
+  map(function(A) stevedata$Wobs^(-2/3) * stevedata$Sobs^(1/2) * A^(5/3))
+```
+
+Now just look at time 6. 
+
+```{r}
+aws6samps <- awssamps %>% 
+  map(function(x) x[, 6])
+
+Q6estsamps <- map2(aws6samps, lognsamps_list, function(x, y) x / exp(y))
+
+Q6estsamps[[1]]
+
+hist(unlist(Q6estsamps))
+hist(exp(lq6[[1]]))
+```
+
+
+
+```{r}
+
+awssamps %>% 
+  sample(1) %>% 
+  `[[`(1) %>% 
+  plot_DAWG()
+
+plot_DAWG(awssamps[[1]])
+plot_DAWG(awssamps[[2]])
+
+awssamps %>% 
+  sample(20) %>% 
+  map(~apply(., 2, function(x) exp(mean(log(x))))) %>% 
+  bind_rows() %>% 
+  t() %>% 
+  plot_DAWG
+```
+
+Now do the same for the whole thing.
+
+```{r}
+qhat_samps <- map2(awssamps, lognsamps_list, function(x, y) x / exp(y))
+
+qhat_samps %>% 
+  sample(1) %>% 
+  `[[`(1) %>% 
+  plot_DAWG()
+
+qhat_samps %>% 
+  sample(20) %>% 
+  map(~apply(., 2, function(x) exp(mean(log(x))))) %>% 
+  bind_rows() %>% 
+  t() %>% 
+  plot_DAWG
+
+```
+
+OK, responded to Steve. That's off my plate for now.
+
+On to new stan models.
+
+### Back to Steve's stuff (email and gchat correspondence)
+
+```{r}
+AirSWOT_Data <- stevedata
+AirSWOT_priors <- structure(list(lowerbound_logQ = 3.11576832481911, upperbound_logQ = 9.6493176226168, 
+    lowerbound_A0 = 30, upperbound_A0 = 1e+06, lowerbound_logn = -4.6, 
+    upperbound_logn = -1.5, lowerbound_logQc = 0, upperbound_logQc = 10, 
+    lowerbound_logWc = 1, upperbound_logWc = 8, lowerbound_b = 0.01, 
+    upperbound_b = 0.8, sigma_man = structure(c(0.25, 0.25, 0.25, 
+    0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 
+    0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 
+    0.25), .Dim = c(4L, 6L)), sigma_amhg = structure(c(0.22, 
+    0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 
+    0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 0.22, 
+    0.22, 0.22, 0.22), .Dim = c(4L, 6L)), logQc_hat = 5.34710753071747, 
+    logWc_hat = 4.42537368001871, b_hat = c(0.02161, 0.02161, 
+    0.02161, 0.02161), logA0_hat = c(4.53066986280961, 4.69196614238028, 
+    4.62937503405083, 4.47473836822688), logn_hat = -3.5, logQ_sd = c(0.832554611157698, 
+    0.832554611157698, 0.832554611157698, 0.832554611157698, 
+    0.832554611157698, 0.832554611157698), logQc_sd = 0.832554611157698, 
+    logWc_sd = 4.71249322990639, b_sd = 0.05, logA0_sd = 0.1, 
+    logn_sd = 1, Werr_sd = 5L, Serr_sd = 1.6971e-05, dAerr_sd = 5), .Names = c("lowerbound_logQ", 
+"upperbound_logQ", "lowerbound_A0", "upperbound_A0", "lowerbound_logn", 
+"upperbound_logn", "lowerbound_logQc", "upperbound_logQc", "lowerbound_logWc", 
+"upperbound_logWc", "lowerbound_b", "upperbound_b", "sigma_man", 
+"sigma_amhg", "logQc_hat", "logWc_hat", "b_hat", "logA0_hat", 
+"logn_hat", "logQ_sd", "logQc_sd", "logWc_sd", "b_sd", "logA0_sd", 
+"logn_sd", "Werr_sd", "Serr_sd", "dAerr_sd"), class = "bampriors")
+
+
+AirSWOT_man_amhg <- bamr:::bam_estimate(bamdata = AirSWOT_Data,variant = "manning",bampriors = AirSWOT_priors, reparam = FALSE, seed = 9124)
+```
+
+
+```{r}
+Ssamps <- extract(AirSWOT_man_amhg, "Sact")[1]
+Wsamps <- extract(AirSWOT_man_amhg, "Wact")[1]
+dAsamps <- extract(AirSWOT_man_amhg, "dAact")[1]
+
+library(reshape2)
+logAsamps <- extract(AirSWOT_man_amhg, "logA_man")[[1]] %>% 
+  melt()
+logWsamps <- extract(AirSWOT_man_amhg, "logW")[[1]] %>% 
+  melt()
+logSsamps <- extract(AirSWOT_man_amhg, "logS")[[1]] %>% 
+  melt()
+
+logRHSsamps <- logAsamps %>% 
+  mutate(value = 5/3 * logAsamps$value - 2/3 * logWsamps$value + 1/2 * logSsamps$value,
+         value = exp(value)) %>% 
+  split(.$iterations) %>% 
+  map(~acast(., Var2 ~ Var3))
+
+logRHSsamps[[1]] %>% 
+  plot_DAWG()
+
+logRHSsamps %>% 
+  sample(20) %>% 
+  map(~apply(., 2, function(x) exp(mean(log(x))))) %>% 
+  bind_rows() %>% 
+  t() %>% 
+  plot_DAWG
+```
+
+
+What's that do once n is added in?
+
+```{r}
+lognsamps <- extract(AirSWOT_man_amhg, "logn")[[1]] %>% 
+  melt()
+
+head(lognsamps)
+
+
+logmanqsamps <- logAsamps %>% 
+  left_join(lognsamps, by = "iterations") %>% 
+  mutate(value = 5/3 * logAsamps$value - 2/3 * logWsamps$value + 1/2 * logSsamps$value,
+         value = exp(value) / exp(lognsamps$value)) %>% 
+  # glimpse() %>% 
+  select(-value.x, -value.y) %>% glimpse() %>% 
+  split(.$iterations) %>% 
+  map(~acast(., Var2 ~ Var3))
+
+head(logmanqsamps)
+  
+logmanqsamps[[1]] %>% 
+  plot_DAWG()
+
+logmanqsamps %>% 
+  sample(20) %>% 
+  map(~apply(., 2, function(x) exp(mean(log(x))))) %>% 
+  bind_rows() %>% 
+  t() %>% 
+  plot_DAWG
+
+```
+
+Still not agreeing with hydrograph!
+
+```{r}
+logQsamps <- extract(AirSWOT_man_amhg, "logQ")[[1]] %>% 
+  melt()
+
+head(logQsamps)
+
+ggplot(logQsamps, aes(x = Var2, y = exp(value), group = Var2)) + 
+  geom_boxplot()
+
+bam_hydrograph(AirSWOT_man_amhg)
+
+foo <- bam_estimate(bamdata = AirSWOT_Data,variant = "manning",
+                    bampriors = AirSWOT_priors, reparam = FALSE, seed = 9124)
+bam_hydrograph(foo)
+```
+
+
+## Stan models for A0
+
+Do sampling for known sigma_dgdx and sigma_alpha. 
+
+```{r}
+stanmod1 <- stan_model("../stan/A0.stan")
+
+data1 <- bat_data(swotlist = uscase, sigma_dgdx = 1.66e-5, sigma_alpha = 4.7e-3, sigma_err = 1.96e-2)
+characterize_closure(uscase)
+vb1 <- vb(stanmod1, data = data1, iter = 10000)
+summary(vb1) # no good
+
+samp1 <- sampling(stanmod1, data = data1, cores = 3, chains = 3, iter = 10000)
+
+summary(samp1)$summary
+
+stan_trace(samp1, "A0", inc_warmup = TRUE)
+
+stan_trace(samp1, "logQn[1]", inc_warmup = TRUE)
+stan_trace(samp1, "logQn[30]", inc_warmup = TRUE)
+stan_trace(samp1, "alpha", inc_warmup = TRUE)
+stan_trace(samp1, "dgdx[1]", inc_warmup = TRUE)
+stan_trace(samp1, "dgdx[1]", inc_warmup = FALSE)
+```
+
+
+
+```{r}
+uscase %>% 
+  manning_gamma() %>% 
+  decomp_gamma(xmat = uscase$x) %>% 
+  `[[`("dgdx") %>% 
+  plot()
+```
+
+```{r}
+foo <- extract(samp1, "dgdx")[[1]] %>% 
+  melt()
+
+head(foo)
+
+foo %>% 
+  group_by(Var2) %>% 
+  summarize(lwr = quantile(value, 0.1), upr = quantile(value, 0.9), mean = mean(value)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = Var2, y = mean, ymin = lwr, ymax = upr)) +
+  geom_pointrange()
+```
+
+
+```{r}
+estA0_lm_ws35()
+
+```
+
+
+
+## Po posterior vs prior for MJ
+
+```{r}
+library(bamr)
+source("../../airSWOT/lib/pripost.R")
+
+load("../../airSWOT/cache/bd_po.RData")
+load("../../airSWOT/cache/bp_po.RData")
+load("../../airSWOT/cache/est_po.RData")
+
+pripost_A0(bampriors = bp_po, stanfit = est_po)
+pripost_alpha(bp_po, bd_po, est_po)
+pripost_n(bampriors = bp_po, stanfit = est_po)
+pripost_qbar(bampriors = bp_po, bd_po, est_po)
+
+stan_trace(est_po, "logn", inc_warmup = TRUE)
+```
+
+What if I initialize logn to be really low?
+
+```{r}
+# foo <- bam_estimate(bd_po, "manning", bp_po, init_r = 10, iter = 2000)
+
+stan_trace(foo, "logn", inc_warmup = TRUE)
+pripost_n(bampriors = bp_po, stanfit = foo)
+```
+
+Doesn't change a thing. Weird. 
+
+```{r}
+glimpse(valdf)
+pripost_qdot(bp_po, est_po)
+```
+

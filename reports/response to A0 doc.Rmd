@@ -1,0 +1,59 @@
+---
+title: "Response to A0 document"
+date: "May 9, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Here's what I think about A0 referencing. The most natural reference point, in some sense, is the sample minimum. This is intuitive because everything above it is observed and everything below it is unobservable. However, what happens if a new low-flow condition is observed with area below A0? Do we change the definition of A0? If we observe the river long enough, we can expect A0 to keep creeping downward as the number of observed days increases. Defining A0 as a mean is better from this standpoint. But so is median, which I think is the best, for the following reasons:
+
+- It is stationary with respect to sample size. That is, the expected value of the sample median does not vary with sample size, whereas the expected value of the sample minimum does. 
+- It is robust to outliers and strongly skewed distributions. Obviously, we don't want the occasional errant observation to drastically affect A0, and median is arguably a better indicator of "central tendency" than mean for skewed distributions.
+- It co-occurs with sample medians of different bathymetric variables. Since we expect the pairwise relationships between width, height, and area to be monotonic, then for example $\text{median}(f_W(H)) = f_W(\text{median}(H))$ and ditto for relationships with width. 
+- Finally, under reasonable assumptions it coincides with a very useful quantity, the geometric mean. The key assumption is that the distribution of log-transformed area is symmetric in shape, as occurs, for example, if area is lognormally distributed. If area is lognormal (a stronger but assumption), then the log of the geometric mean is the distribution's location parameter ($\mu$). These relationships are far less likely to hold for arithmetic mean of area, since the distribution of area (as well as other variables in Manning's equation) are almost always right-skewed. 
+
+
+I view the task of calculating dA as coprising 2 main parts. The first is learning the functional relationship $f_W()$ between width and height. The second is integrating this function for a given W, H pair. As progressively more data are observed, we will be better able to estimate $f_W()$, and therefore make better dA estimates (including the entire timeseries up to this point). Integration is trivial given an estimate of the function. I agree that the error-in-variables approach is crucial, but I see no reason to restrict ourselves to linear (even piecewise-linear) functional forms for bathymetry. I have a good deal of experience using so-called nonparametric regression, which fits an arbitrarily flexible smooth function to the data, and given sufficient data I think this would be advantageous. Unfortunately the tools that I have used for this do not extend to error-in-variables models. But I think it's possible--for example, [this paper](https://www.stat.tamu.edu/~carroll/ftp/2002.papers.directory/berry_ruppert_carroll.pdf) provides one method. 
+
+You've also raised an impotant point that I've overlooked until now--namely that given a good estimate of $f_W()$ we can reduce error in W (using observed H) and H (using observed W). This could be very powerful, and not just for calculating dA. Couldn't this also be used to better estimate S by estimating $f_W$ at the sub-reach scale? At the very least, reducing width errors at the reach scale would be a boon. 
+
+Other notes on the doc:
+
+- In definitions section: Integral should go from $H_{min}$ to $H_t$, as it integrates W dh up to the current observation. 
+- Also in definitions: I don't think $A_0$ is arbitrary in this definition--as it must be integrated from the minimum observation to the current observation. Afterward, this can be adjusted arbitrarily by adding/subtracting the same constant to/from A0/A'.
+
+
+### A' error
+
+The variance of A' takes the following form when slope is known:
+
+$$
+Var(A') = 4 \mu ^2 \sigma ^ 2 + 2 \sigma^4
+$$
+
+where $\mu = \sqrt{\frac{p}{2}} (H - H_1) + \frac{W_1}{\sqrt{2p}}$ and $\sigma^2 = \frac{p}{2} \sigma^2_H$.
+
+This assumes normality of H error.
+
+If slope is unknown, then further approximation gives:
+
+$$
+Var(A') = 4 \mu ^2 \sigma ^ 2 + 2 \sigma^4 + \frac{W_1^4}{4p^2}\big(\exp(2 \sigma^2_p / p^2) - \exp(\sigma^2_p / p^2) \big)
+$$
+
+where 
+
+$$
+\mu = \sqrt{\frac{p}{2}} (H - H_1) + \frac{W_1}{\sqrt{2p}}
+$$
+
+and 
+
+$$
+\sigma^2 = \frac{p}{2} \sigma^2_H + \frac{(H - H_1)^2p}{2}  \Big(1 - \exp({\frac{\sigma^2_p}{8 p^2}})  \Big)
+ + \frac{W_1^2}{2p} \Big(1 - \exp({\frac{\sigma^2_p}{8 p^2}})\Big)
+$$

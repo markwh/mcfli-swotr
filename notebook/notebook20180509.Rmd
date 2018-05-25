@@ -1,0 +1,114 @@
+---
+title: "notebook20180509"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Prepping for meeting. I should show:
+
+- Likelihood plots for A0
+    - Definite ridge
+    - Need a (informative) prior
+- Results using new Stan A0 functions.
+    - v2-1
+    - v4-1
+    
+
+```{r}
+library(rstan)
+
+mod2.1 <- stan_model("../stan/A0_v2-1.stan")
+mod4.1 <- stan_model("../stan/A0_v4-1.stan")
+
+```
+
+Need a function for quickly creating stan inputs. 
+
+```{r}
+inpfun2 <- function(swotlist) {
+  out <- with(swotlist, 
+              list(
+                   nt = ncol(W),
+                   nx = nrow(W),
+                   dA = t(dA),
+                   W = t(W),
+                   S = t(S),
+                   x = x[, 1], 
+                   
+                   logA0_hat = mean(bamr::estimate_logA0(W)),
+                   # logA0_sd = 1,
+                   sigma_logA0 = 1,
+                   omega = make_omegas(n = nrow(W)),
+                   # sigma_dA = 1e-7,
+                   # sigma_dgdx = 4.5e-9,
+                   # sigma_nu = 1e-4,
+                   sigma_err = 1.4e-3
+  ))
+  out
+}
+
+estA0_stan2 <- function(swotlist, ...) {
+  inps <- inpfun2(swotlist)
+  est <- sampling(mod2.1, inps, cores = 3, chains = 3, ...)
+  est
+}
+
+
+foo <- estA0_stan2(sscase)
+summary(foo, pars = "A0")
+```
+
+Now look at A0 estimates for all rivers
+
+```{r}
+
+
+ests_v2 <- reachdata %>% 
+  # map(function(x) within(x, {dA = rezero_dA(dA, "minimum")})) %>% 
+  map(possibly(estA0_stan2, otherwise = NA))
+ests_v2 %>% 
+  map(get_posterior_mean, pars = "A0")
+```
+
+
+Now a function for version 4-1.
+
+```{r}
+inpfun4 <- function(swotlist) {
+  out <- with(swotlist, 
+              list(
+                   nt = ncol(W),
+                   nx = nrow(W),
+                   dA = t(dA),
+                   W = t(W),
+                   S = t(S),
+                   x = x[, 1], 
+                   
+                   logA0_hat = mean(bamr::estimate_logA0(W)),
+                   # logA0_sd = 1,
+                   sigma_logA0 = 1,
+                   omega = make_omegas(n = nrow(W)),
+                   # sigma_dA = 1e-7,
+                   # sigma_dgdx = 4.5e-9,
+                   # sigma_nu = 1e-4,
+                   sigma_err = 1.4e-3
+  ))
+  out
+}
+
+estA0_stan2 <- function(swotlist, ...) {
+  inps <- inpfun2(swotlist)
+  est <- sampling(mod2.1, inps, cores = 3, chains = 3, ...)
+  est
+}
+
+
+foo <- estA0_stan2(sscase)
+```
+
+It looks like I'll just have to explain this. Can I show that nice likelihood plot?
+
+

@@ -1,0 +1,95 @@
+---
+title: "McMan models"
+author: "Mark Hagemann"
+date: "May 14, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Mass-conserved Manning's equation can be specified in several ways. The following are a few that I have used, or attempted to use. 
+
+### 1. BAM implementation
+
+This was my first go at representing a Manning-based McFLI as a likelihood. The likelihood funciton is given by:
+
+```
+man_lhs[i] ~ normal(man_rhs[i], 6 * sigma_man[i])
+```
+
+
+$$
+4  \log W_{it} - 3  \log S_{it} \sim N(10  \log (A_{0,i} + \delta A_{it}) - 6  \log n - 6  \log Q_t, 6  \sigma_{man})
+$$
+
+
+As a likelihood, this becomes (denoting vector parameters in boldface):
+
+$$
+\ell(\mathbf{A_{0}, \log Q}, n) = - \sum_{i = 1}^{N_i} \sum_{t = 1}^{N_t} \Big[ \frac{1}{72 \sigma^2} (4  \log W_{it} - 3  \log S_{it}  - (10  \log (A_{0,i} + \delta A_{it}) - 6  \log n - 6  \log Q_t))^2 + 10 \log(A_{0,i} + \delta A_{it})\Big]
+$$
+
+
+Note that this treats $\sigma$ as a known quantity. That is, the standard deviation of error in Manning's equation is known a priori. 
+
+This is only part of the implementation in BAM--as it is Bayesian, it also uses prior distribution functions to complement the likelihood. The resulting estimates are provided as probability distributions, reflecting both the likelihood and prior uncertainties. Likelihood alone does not provide such an inference, but may be used for inference via maximization. 
+
+### Linear model 
+
+More recently Mike and I have been playing around with the following Manning McFLI:
+
+$$
+A_{0,i} (W_{it}^{-2/3} S_{it}^{1/2})^{3/5} = A_{0,i} (W_{it}^{-2/3} S_{it}^{1/2})^{3/5}
+$$
+
+
+$$
+X \Omega a_0 = (X \circ \delta A) \omega + \epsilon
+$$
+
+This is nice in that it can be used to infer $a_0$ via linear regression. Unfortunately, it also has some pretty unwieldy error structure in practice, violating assumptions of linear regression. But if we ignore this error structure, the linear model has the following likelihood: 
+
+$$
+\ell(\mathbf{a_0}, \sigma) = - \frac{N_x N_t}{2} \log (2 \pi \sigma^2) - \frac{1}{2 \sigma^2} (X \Omega a_{0} - (X \circ \delta A) \omega)^{T} (X \Omega a_{0} - (X \circ \delta A) \omega)
+$$
+
+
+### Pairwise equalities
+
+Another way to apply the previous model is to assert pairwise conservation of mass (with random error) among reaches. 
+
+The model here is 
+
+$$
+(A_{0,i} + \delta A_{it})W_{it}^{-2/5} S_{it}^{3/10} = (A_{0,j} + \delta A_{jt})W_{jt}^{-2/5} S_{jt}^{3/10} + \epsilon_{ijt}, 1 \leq i < j \leq N_x
+$$
+
+
+The log likelihood here works out to 
+
+$$
+\ell(\mathbf{A_0}, \sigma) =  - \frac{N_x(N_x - 1) N_t}{4} \log (2 \pi \sigma^2) - \frac{1}{2 \sigma^2}\sum_{i < j} \sum_{t = 1}^{N_t} \Big[(A_{0,i} + \delta A_{it})W_{it}^{-2/5} S_{it}^{3/10} - (A_{0,j} + \delta A_{jt})W_{jt}^{-2/5} S_{jt}^{3/10}\Big]^2
+$$
+
+
+### Simplified BAM
+
+A simplified version of the BAM Manning McFLI can be written as follows:
+
+$$
+4  \log W_{it} - 3  \log S_{it} \sim N(10  \log (A_{0,i} + \delta A_{it}) - 6  \log Qn, 6  \sigma)
+$$
+
+or, equivalently (and in a form I have come to prefer):
+
+$$
+2/3 \log W_{it} - 1/2  \log S_{it} \sim N(5/3  \log (A_{0,i} + \delta A_{it}) - \log Qn, \sigma)
+$$
+
+The log-likelihood then is 
+
+$$
+\ell(\mathbf{A_{0}}, \log Qn, \sigma) = - \sum_{i = 1}^{N_i} \sum_{t = 1}^{N_t} \Big[ \frac{1}{2 \sigma^2} (2/3  \log W_{it} - 1/2  \log S_{it}  - 5/3  \log (A_{0,i} + \delta A_{it}) + \log Qn )^2 + 5/3 \log(A_{0,i} + \delta A_{it})\Big]
+$$

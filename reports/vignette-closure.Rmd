@@ -1,0 +1,107 @@
+---
+title: "Closure decomposition"
+author: "Mark Hagemann"
+date: "May 25, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Not including measurement error, the model for Mass-conserved Manning uncertainty is as follows:
+
+$$
+\begin{aligned}
+-\frac{2}{3}\log W_{it} + \frac{5}{3} \log A_{it} + \frac{1}{2} \log S_{it} - \log ( \bar{Q_t}\bar{n}) &= \gamma_{it} + \nu_{it} \\
+&=  \gamma'_t(x_i - \bar{x})) + \nu_{i \cdot} + \epsilon_{it} \\
+\end{aligned} \\
+\gamma'_t \sim N(0, \sigma_{\gamma'}) \\
+\sum_{i = 1}^{N_r}\nu_{i\cdot} = 0 \\
+\epsilon_{it} ~ N(0, \sigma_\epsilon)
+$$
+
+Given a swot-like dataset, there are several functions for analyzing the closure term on the right-hand side of equation ####.
+
+First, load a dataset. We'll work with GaronneUpstream from the Pepsi 1 cases. 
+
+
+
+```{r}
+datai <- reachdata$GaronneUpstream
+
+swot_plot(datai)
+```
+
+The full closure term, $n_it$ is given by $n_{it} = \frac{1}{\bar{Q}_t} W_{it}^{-2/3} A_{it}^{5/3} S_{it}^{1/2}$. Toggling off the the `mc` argument gets rid of steady-state mass conservation, replacing $\bar{Q}_t$ with $Q_{it}$ in the previous equation. 
+
+```{r}
+plot_DAWG(manning_closure(datai))
+plot_DAWG(manning_closure(datai, mc = FALSE))
+```
+
+Various functions show the decomposition of the closure term. The first-level decomposition is into variability from flow-imbalance ($\gamma_{it}$) and variability from non-constant flow resistance ($\nu_{it}$).
+
+```{r}
+plot_DAWG(manning_gamma(datai))
+plot_DAWG(manning_nu(datai))
+
+```
+
+We can further decompose these. First $\gamma_{it} = \hat{\gamma}_{it} + \epsilon_{\gamma} = \gamma'_{t}(x_{i} - \bar{x}) + \epsilon_\gamma$
+
+```{r}
+gamma_decomp <- datai %>% 
+  manning_gamma() %>% 
+  decomp_gamma(xmat = datai$x)
+
+plot_DAWG(gamma_decomp$gammahat)
+plot_DAWG(gamma_decomp$gammaerr)
+plot(gamma_decomp$dgdx, type = "l")
+sd(gamma_decomp$dgdx) * sd(datai$x[, 1])
+```
+
+And similarly, but more simply, $\nu = \hat{\nu}_{it} + \epsilon_\nu = \bar{\nu}_{i\cdot} + \epsilon_{\nu}$
+
+```{r}
+nu_decomp <- datai %>% 
+  manning_nu() %>% 
+  decomp_nu()
+
+plot_DAWG(nu_decomp$nuhat)
+plot_DAWG(nu_decomp$nuerr)
+plot(nu_decomp$nubar)
+
+```
+
+Finally we can do the full closure decomposition using `characterize_closure`. 
+
+```{r}
+clos_decomp <- characterize_closure(datai)
+str(clos_decomp)
+
+clos_decomp$dgdx * clos_decomp$dx
+clos_decomp$alpha
+clos_decomp$err
+```
+
+
+This leads to a universally applicable metric for flow imbalance. A rough appoximation of the amount of flow variability between two reaches of a given river segment is given by the product of the standard deviation of `dgdx` and that of `x`. 
+
+
+```{r}
+dQ_df <- c(reachdata, list(sscase = sscase, uscase = uscase)) %>% 
+  map(possibly(characterize_closure, otherwise = list(dQ_pct = NA_real_))) %>% 
+  # `[`(!is.na(.)) %>%
+  map_dbl(~.[["dQ_pct"]]) %>% 
+  data.frame(case = names(.), dQ_pct = ., row.names = NULL)
+
+dQ_df %>% 
+  glimpse() %>% 
+  ggplot(aes(x = case, y = dQ_pct)) + 
+  geom_point() +
+  theme(axis.text = element_text(angle = 90))
+
+
+```
+

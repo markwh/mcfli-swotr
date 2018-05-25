@@ -1,0 +1,192 @@
+---
+title: "Variable-slope toy models"
+author: "Mark Hagemann"
+date: "May 21, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(echo = FALSE, message = FALSE, fig.path = "./lisflood_forblog_fig/")
+opts_knit$set(root.dir = "../")
+```
+
+```{r}
+library(ProjectTemplate)
+load.project()
+```
+
+
+Mike and I have been writing recently about a set of ultra-simple McFLI models using a two-reach, constant-slope setup of perfectly Manning-adherent trapezoidal channels. This illustrated some of the difficulty in estimating bathymetry that arises from introducing a small amount of measurement error. 
+
+A second set of synthetic SWOT-like cases comes from running Lisflood on a marginally more complicated 3-reach setup. Here, slope varies, but width is constant (channels are rectangular), and Manning's equation is ever-so-slightly imperfect in representing channel hydraulics. 
+
+Two flow scenarios were run through this model--a steady-state case forced by a series of constant flows and sampled once each had reached steady-state, and an unsteady case forced by a unit hydrograph. The Lisflood output was spatially aggregated to reach-averaged observations. The simulated variables are presented in the figures below. Variables are:
+
+- A: cross-sectional area ($m^2$)
+- D: Water depth (m)
+- H: Surface elevation (m)
+- Q: Discharge ($m^3/s$)
+- S: Surface slope (unitless)
+- W: River width (m)
+- dA: A - min(A)
+- x: Average along-river distance of reach.
+
+```{r}
+swot_plot(sscase)
+```
+
+
+```{r}
+swot_plot(uscase)
+```
+
+The steady-state case is clearly contrived--as in, it doesn't look like any timeseries you'd observe on a real river. But it satisfies the McFLI assumptions, in that mass is pefectly conserved and geometry varies from reach to reach. The unsteady case is sampled at much higher resolution than anything SWOT will measure, but it sure looks like a well-behaved hydrograph. While mass is conserved, the misalignment of the peaks show a clear $\partial Q/\partial x$. 
+
+The linear model for estimating bathymetry is an extension of the "simplest McFLI" presented in previous posts, with the added feature that it can estimate an arbitrary number of locations' $A_0$, by creating a model matrix of all unique pairs of reaches. How well does it work here?
+
+### Results
+
+The steady-state case might be expected to work best, since the linear model for A0 assumes steady-state mass conservation. And it does! A0 is estimated almost perfectly:
+
+```{r}
+realA0 <- (sscase$A - sscase$dA)[, 1]
+plot(estA0(sscase), realA0, xlab = "Estimated A0", ylab = "Real A0"); abline(0, 1)
+```
+
+*Almost* perfectly. The imprecision here is not from measurement error (as there is none), but from error in Manning's equation. In the Lisflood runs, Manning's n is specified as 0.04 for every reach, but if it is calculated for every time and reach assuming steady-state Q, it exhibits the following time-series:
+
+```{r}
+plot_DAWG(manning_closure(sscase)) +
+  ylab("Calculated Manning's n")
+```
+
+That's variability in Manning's n of less than 0.5%, but it leads to around 2% error in A0 estimates. 
+
+A more complete picture of estimated A0 variability can be gotten from repeated estimation using bootstrap resampling of observation times. Each estimate comes from sampling with replacement from the original 9 observation times and calculating A0 on this subsampled dataset using the linear model. Repeating this process 1000 times generated the distribution of estimates shown in the plot below. 
+
+```{r}
+
+casei <- sscase
+
+cols <- 1:ncol(casei$W)
+sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE))
+boot_cases <- map(sampcollist, ~swot_sset(casei, keeptimes = .))
+boot_A0 <- map(boot_cases, estA0)
+
+boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+
+boot_df <- boot_A0 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(boot_nunique, ~mutate(.x, nunique = .y)) %>% 
+  bind_rows(.id = "sampno")
+
+boot_df %>%
+  gather(key = reach, value = A0_estimate, -sampno, -nunique) %>%
+  # filter(nunique > 7) %>%
+  ggplot(aes(x = reach, y = A0_estimate, color = as.factor(nunique))) +
+  geom_point(position = position_jitterdodge()) +
+  scale_colour_viridis_d() +
+  labs(color = "no. unique times")
+  # geom_violin()
+```
+
+Since the dataset is subsampled with replacement, each estimate is done with 9 time points, but a smaller number of unique time points. The plot shows that estimates that used more unique flow conditions were 
+less variable and more accurate, but that even estimates using 8 of 9 flow conditions had a range of roughly 10% on either side of true A0. 
+
+
+The unsteady case did not yield as nice of reslts, as may be expected. First, here is the equivalent plot as above showing Manning-n variability (assuming steady-state mass-conserved flow).
+
+```{r}
+plot_DAWG(manning_closure(uscase)) +
+  ylab("Calculated Manning's n")
+```
+
+While visually pleasing, this shows roughly 50% variability in the closure term (the term $n_{it}$ required to satisfy the equality $Q_t = \frac{1}{n_{it}}W_{it}^{-2/3}A_{it}^{5/3}S_{it}^{1/2}$). And here are the resulting A0 estimates (bootstrap resampling, as above):
+
+```{r}
+casei <- uscase
+
+cols <- 1:ncol(casei$W)
+sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE))
+boot_cases <- map(sampcollist, ~swot_sset(casei, keeptimes = .))
+boot_A0 <- map(boot_cases, estA0)
+
+boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+
+boot_df <- boot_A0 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(boot_nunique, ~mutate(.x, nunique = .y)) %>% 
+  bind_rows(.id = "sampno")
+
+boot_df %>%
+  gather(key = reach, value = A0_estimate, -sampno, -nunique) %>%
+  # filter(nunique > 7) %>%
+  ggplot(aes(x = reach, y = A0_estimate, color = as.factor(nunique))) +
+  geom_point(position = position_jitterdodge()) +
+  scale_colour_viridis_d() +
+  guides(color = guide_legend(ncol = 2)) +
+  labs(color = "no. unique times")
+  # geom_violin()
+```
+
+The misplaced assumption of steady-state where there is serious spatial variability renders the method useless! The results are both absurdly biased (average estimated A0 is *negative*) and absurdly variable. The good news is that the flood wave in this case is much faster than anything on SWOT rivers, but this just shows the sensitivity to misplaced assumptions. 
+
+In this particular case we can improve the results by lagging the downstream reaches' data to correct for some of the flow imbalance. Thus corrected, the dataset looks as follows, with peaks and troughs much better aligned across reaches:
+
+```{r}
+newcase <- swot_timelag(uscase, c(0, -2, -4))
+swot_plot(newcase)
+
+```
+
+The Manning's n timeseries looks better too (note the difference in relative magnitude of variability):
+
+```{r}
+plot_DAWG(manning_closure(newcase)) +
+  ylab("Calculated Manning's n")
+```
+
+How does this affect A0 estimates? Observe:
+
+```{r}
+casei <- newcase
+
+cols <- 1:ncol(casei$W)
+sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE))
+boot_cases <- map(sampcollist, ~swot_sset(casei, keeptimes = .))
+boot_A0 <- map(boot_cases, estA0)
+
+boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+
+boot_df <- boot_A0 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(boot_nunique, ~mutate(.x, nunique = .y)) %>% 
+  bind_rows(.id = "sampno")
+
+boot_df %>%
+  gather(key = reach, value = A0_estimate, -sampno, -nunique) %>%
+  # filter(nunique > 7) %>%
+  ggplot(aes(x = reach, y = A0_estimate, color = as.factor(nunique))) +
+  geom_point(position = position_jitterdodge()) +
+  scale_colour_viridis_d() +
+  guides(color = guide_legend(ncol = 2)) +
+  labs(color = "no. unique times")
+```
+
+Clearly this is much better, but not anywhere near where we'd like to be in terms of precision or accuracy. 
+
+## Summary
+
+- Two synthetic SWOT-like cases were created using a simple Lisflood model.
+    - 3 uniform reaches
+    - Variable slope, constant width
+    - No measurement error
+    - One case with 9 steady-state flow conditions
+    - One case simulating a unit hydrograph at high temporal resolution
+- Bootstrap resampling showed magnitude of A0 estimate variability
+- A0 estimates on steady-state case had ~2% relative error. 
+- A0 estimates on unstesdy case had >100% relative error, negative A0 estimates.
+- Time-lagging downstream reaches on unsteady case improved results dramatically, but still had ~20% relative error.
+
+

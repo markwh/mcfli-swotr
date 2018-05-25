@@ -1,0 +1,97 @@
+---
+title: "notebook20180404"
+author: "Mark Hagemann"
+date: "April 4, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I need to discern exactly how error in McMan assumptions get translated into model errors:
+
+- Errors in model matrix
+- Errors in response
+
+Start with Manning
+
+$$
+Q_{it} = \frac{1}{n_{it}} A_{it}^{5/3}W_{it}^{-2/3}S_{it}^{1/2}
+$$
+
+Alternatively:
+
+$$
+Q_{it}^{3/5} = n_{it}^{-3/5} A (W_{it}^{-2/3}S_{it}^{1/2})^{3/5}
+$$
+
+
+I usually to take flow and n to be exactly constant across space, and n to be constant in time. This is not strictly speaking true. Compare:
+
+$$
+X_{it} = (W_{it}^{-2/3}S_{it}^{1/2})^{3/5}
+$$
+
+In theory, a mass-conserved observation matrix. (That is, $\mathbf{X} \omega = \mathbf{0}$ for any vector $\omega$ such that $\mathbf{1}'\omega = 0$)
+
+
+But really we need to figure in closure term. In order to determine (additive) error, this must be additive in linear-A space, so it will be somewhat contrived. 
+
+Per (handwritten) notebook work:
+
+$$
+\mathbf{X}_{real} = \mathbf{X}_{meas} + \mathbf{\Gamma}
+$$
+
+where the elements of $\mathbf{Gamma}$ are $\gamma_{it} = (Q_{it}n_{it})^{3/5} -  A (W_{it}^{-2/3}S_{it}^{1/2})^{3/5}$
+
+Now calculate this for sscase. 
+
+```{r}
+ssnmat <- with(sscase, manningN(A = A, W = W, S = S, Q = Q))
+ssgamma <- (sscase$Q * ssnmat)^(3/5) - manning_ws35(sscase) * sscase$A
+
+plot_DAWG(ssgamma)
+```
+
+That can't be right. Rather, look at deviation from mean (in space) of true Qn matrix.
+
+```{r}
+Qnmean <- apply((sscase$Q * ssnmat)^(3/5), 2, mean) %>% 
+  swot_vec2mat(pattern = sscase$W)
+
+Qndev <- (sscase$Q * ssnmat)^(3/5) - Qnmean
+
+plot_DAWG(ssnmat)
+plot_DAWG(sscase$S)
+plot_DAWG(Qndev)
+plot_DAWG(manning_ws35(sscase))
+plot_DAWG(Qndev / manning_ws35(sscase))
+```
+
+That's getting close, but still needs to be better elucidated and formalized. There is not much slope variability compared to closure error. 
+
+
+Check what the model looks like in the corrected case. 
+
+```{r}
+xmat_real <- manning_ws35(sscase) - Qndev
+
+omegas <- make_omegas(nrow(xmat_real))
+modmat_real <- map(omegas, function(x) t(xmat_real) %*% diag(x)) %>% 
+  map(as.data.frame) %>% 
+  bind_rows()
+resp_real <- map(omegas, function(x) t(xmat_real * sscase$dA) %*% x) %>% 
+  unlist()
+
+moddf_real <- mutate(setNames(modmat_real, paste0("x", 1:ncol(modmat_real))),
+                     y = resp_real)
+
+lm_real <- lm(y ~ 0 + ., data = moddf_real)
+
+summary(lm_real)
+```
+
+OK, math not working here...

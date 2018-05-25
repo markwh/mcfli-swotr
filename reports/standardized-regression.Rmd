@@ -1,0 +1,26 @@
+---
+title: "standardized regression"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is just a brief derivation of standardized regression in the case where the original model matrix does not include an intercept. 
+
+***UPDATE:*** *This can't be done--at least not elegantly, without redefining correlation. Math not included below, but done on paper.*
+
+We start with a $n \times p$ model matrix, $X$, which we standardize by dividing each row by its standard deviation, $\sigma_i$, and arrive at the *standardized* model matrix, $X_* = X S^{-1}$, where $S$ is a $p \times p$ diagonal matrix whose $i^{\text{th}}$ diagonal entry is $\sigma_i$. Unlike in the usual case where the original model includes an intercept, we *do not* first subtract the mean from the columns of $X$. Then, if the original model is $X \beta = y + \epsilon$, the standardized model is $X_*S \beta = y + \epsilon$. 
+
+The least-squares estimator for $\beta$ is $(X^TX)^{-1}X^Ty$. Translating this to the standardized model, we get 
+$$
+\begin{aligned}
+\hat{\beta} &= (X^TX)^{-1}X^Ty \\
+&= (S^TX_*^TX_*S)^{-1}S^TX_*^Ty \\
+&= S^{-1}(X_*^TX_*)^{-1}X_*^Ty \\
+&= S^{-1}\hat{\beta_*}
+\end{aligned}
+$$
+
+Except now we need to interpret $(X_*^TX_*)$. In the intercept case, in which the columns were mean-adjusted, this had a nice form involving the correlation coefficient. Here, it's more complicated. 

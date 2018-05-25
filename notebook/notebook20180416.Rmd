@@ -1,0 +1,83 @@
+---
+title: "notebook20180416"
+author: "Mark Hagemann"
+date: "April 16, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I now have a little bit of time to get strategic. Think about package structure, audience, functionality. Also need to plan out A0 lm functions vis a vis measurement error models. 
+
+On the second front I made some progress on Friday, but results didn't match up against expectations. It occurs to me that error magnitude should be compared against characteristic ws35 value, since this is only ever modified by 0's and 1's in making the model matrix. 
+
+I also need to solidify my decomposition of ws35 errors. It seems like I should be multiplicative, operate in log space. But:
+
+- This makes dQ/dx (or log-space equivalent) hard to interpret. 
+- Not clear how this would translate to collinearity of errors in space. 
+
+I think I can clarify the collinearity part. Anyway, I should push ahead with multiplicative error and deal with problems as they present themselves. 
+
+So today's tasks:
+
+1. Measurement error decomposition
+    - Plan for simulation
+    - characterize magnitude relative to logical standard
+    - Make utility functions for probing errors, truth in measurement model framework
+2. Plan package development
+    - Decide on a home for measurement error stuff
+    - Comb through prefixes, file organization (again)
+    - Document
+    - Establish better git habits. 
+    
+## Measurement errors. 
+
+As per last time, I have the following:
+
+$$
+n_{it}Q_{it} = (\nu_{it} \gamma_{it})\bar{n}\bar{Q}_t 
+$$
+
+Model flow imbalance as multiplicative (additive in log space):
+
+
+$$
+\gamma_{it} = \alpha_i+ \beta_t + \epsilon_{it}
+$$
+
+Worth doing ANOVA on gamma (nu too) using this model. 
+
+But first, think through interpretation. I had before said that $\frac{\partial \gamma}{\partial x}$ is often constant. This is equivalent to $\frac{\partial Q}{\partial x}$ being constant. It's also equivalent to $\frac{\partial \log Q}{\partial x}$ and $\frac{\partial \log \gamma}{\partial x}$ being constant. 
+
+That's fine. Now do the anova on gamma and nu.
+
+
+
+```{r}
+gamanova_us <- uscase %>% 
+  swot_gamma() %>% 
+  log() %>% 
+  apply(2, diff) %>%
+  `/`(apply(uscase$x, 2, diff)) %>%
+  reshape2::melt() %>%
+  glimpse() %>% 
+  # summary()
+  lm(value ~ Var1 + Var2, data = .)
+
+# pairs(gamanova_ss)
+
+summary(gamanova_us)
+anova(gamanova_us)
+
+uscase %>% 
+  swot_gamma() %>% 
+  log() %>% 
+  plot_DAWG()
+```
+
+
+
+

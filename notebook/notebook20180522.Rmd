@@ -1,0 +1,285 @@
+---
+title: "notebook20180522"
+author: "Mark Hagemann"
+date: "May 22, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Trying weighted regression based on distance for estA0. See how well it improves things. 
+
+```{r}
+
+realA0 <- map(reachdata, function(x) (x$A - x$dA)[, 1])
+# A0hat1 <- map(reachdata, possibly(estA0, otherwise = NA))
+
+nse1 <- map2_dbl(A0hat1, realA0, NSE)
+rrmse1 <- map2_dbl(A0hat1, realA0, RRMSE)
+nrmse1 <- map2_dbl(A0hat1, realA0, NRMSE)
+
+# Now I sloppily change the estA0 code to add weights
+# A0hat2 <- map(reachdata, possibly(estA0, otherwise = NA))
+
+nse2 <- map2_dbl(A0hat2, realA0, NSE)
+rrmse2 <- map2_dbl(A0hat2, realA0, RRMSE)
+nrmse2 <- map2_dbl(A0hat2, realA0, NRMSE)
+
+plot(nse1, nse2); abline(0, 1)
+plot(rrmse1, rrmse2); abline(0, 1)
+plot(nrmse1, nrmse2); abline(0, 1)
+
+# Try inverse square weights.
+# A0hat3 <- map(reachdata, possibly(estA0, otherwise = NA))
+
+nse3 <- map2_dbl(A0hat3, realA0, NSE)
+rrmse3 <- map2_dbl(A0hat3, realA0, RRMSE)
+nrmse3 <- map2_dbl(A0hat3, realA0, NRMSE)
+
+plot(nse1, nse3); abline(0, 1)
+plot(rrmse1, rrmse3); abline(0, 1)
+plot(nrmse1, nrmse3); abline(0, 1)
+
+
+plot(nse2, nse3); abline(0, 1)
+plot(rrmse2, rrmse3); abline(0, 1)
+plot(nrmse2, nrmse3); abline(0, 1)
+
+ 
+```
+
+Inverse weights are the way to go. 
+
+```{r}
+wtdf <- data.frame(nse = c(nse1, nse2, nse3), 
+                   rrmse = c(rrmse1, rrmse2, rrmse3),
+                   nrmse = c(nrmse1, nrmse2, nrmse3),
+                   case = rep(names(nse1), 3),
+                   weights = rep(c("none", "inverse", "inv.sq"), 
+                                 each = length(nse1))) %>% 
+  gather(key = "stat", value = "value", -weights, -case) %>% 
+  mutate(weights = factor(weights, levels = c("none", "inverse", "inv.sq")),
+         stat = factor(stat, levels = c("rrmse", "nrmse", "nse")))
+wtdf %>% 
+  ggplot(aes(x = stat, y = value, color = weights)) +
+  geom_boxplot() +
+  geom_point(position = position_jitterdodge()) +
+  theme_bw()
+ggsave("estA0_wtcompare_boxplot.png")
+
+wtdf %>% 
+  filter(stat == "rrmse") %>% 
+  ggplot(aes(x = weights, y = value, group = case, color = case)) +
+  geom_point() + 
+  geom_line(size = 0.5) +
+  theme_bw()
+ggsave("estA0_wtcompare_rrmse.png")
+
+wtdf %>% 
+  filter(stat == "nrmse") %>% 
+  ggplot(aes(x = weights, y = value, group = case, color = case)) +
+  geom_point() + 
+  geom_line(size = 0.5) +
+  theme_bw()
+ggsave("estA0_wtcompare_nrmse.png")
+
+wtdf %>% 
+  filter(stat == "nse") %>% 
+  ggplot(aes(x = weights, y = value, group = case, color = case)) +
+  geom_point() + 
+  geom_line(size = 0.5) +
+  theme_bw()
+ggsave("estA0_wtcompare_nse.png")
+
+```
+
+OK, that's that. Now I need to fix up these stan models so I can present something on them.
+
+### Working on Bayesian models
+
+in batman.R
+
+- nlm works if I give it a low enough steptol. 
+- Compare across estimation methods
+
+```{r}
+poA0_logbm <- batman_log(reachdata$Po, iterlim = 500)
+poA0_linQbm <- batman_linQ(reachdata$Po, iterlim = 500)
+
+A0ests_log <- reachdata %>% 
+  map(possibly(~batman_log(., iterlim = 500), otherwise = NA))
+map_int(A0ests_log[!is.na(A0ests_log)], ~.[["code"]])
+estslog <- map(A0ests_log[!is.na(A0ests_log)], ~.[["A0"]])
+
+A0ests_linA <- reachdata %>% 
+  map(possibly(~batman_linA(., iterlim = 500), otherwise = NA))
+map_int(A0ests_linA[!is.na(A0ests_linA)], ~.[["code"]])
+estslinA <- map(A0ests_linA[!is.na(A0ests_linA)], ~.[["A0"]])
+
+A0ests_linQ <- reachdata %>% 
+  map(possibly(~batman_linQ(., iterlim = 500), otherwise = NA))
+map_int(A0ests_linQ[!is.na(A0ests_linQ)], ~.[["code"]])
+estslinQ <- map(A0ests_linQ[!is.na(A0ests_linQ)], ~.[["A0"]])
+
+trueA0 <- map(reachdata, function(x) (x$A - x$dA)[, 1])
+
+A0ests_lm <- reachdata %>% 
+  map(possibly(estA0, otherwise = NA))
+estslm <- A0ests_lm[!is.na(A0ests_lm)]
+
+
+rrmselog <- map2_dbl(estslog, trueA0[names(estslog)], RRMSE)
+rrmselinQ <- map2_dbl(estslinQ, trueA0[names(estslinQ)], RRMSE)
+rrmselinA <- map2_dbl(estslinA, trueA0[names(estslinA)], RRMSE)
+rrmselm <- map2_dbl(estslm, trueA0[names(estslm)], RRMSE)
+
+coms1 <- intersect(names(rrmselog), names(rrmselinA))
+plot(rrmselog[coms1], rrmselinA[coms1]); abline(0, 1)
+
+coms2 <- intersect(names(rrmselinA), names(rrmselm))
+plot(rrmselinA[coms2], rrmselm[coms2]); abline(0, 1)
+
+coms3 <- intersect(names(rrmselinQ), names(rrmselinA))
+plot(rrmselinQ[coms3], rrmselinA[coms3]); abline(0, 1)
+which.max(rrmselinA[coms3])
+```
+
+Next make these models in Stan and validate results.
+
+A0_v4-1.stan should be the same as A0ests_log. 
+
+```{r}
+library(rstan)
+stanmodlog <- stan_model("../stan/A0_v4-1.stan")
+
+prepdata <- function(swotlist) {
+  list0 <- with(swotlist, list(
+  nt = ncol(W),
+  nx = nrow(W),
+  dA = dA,
+  W = W, 
+  S = S, 
+  logA0_hat = log(max(dA) - min(dA)),
+  logn_hat = -3.5,
+  sigma_logn = 0.5))
+  
+  list1 <- with(c(swotlist, list0), 
+    list(sigma_logA0 = 1, 
+         logQ_hat = mean(5/3 * logA0_hat - 2/3 * log(W) + 1/2 * log(S) - logn_hat), 
+         sigma_logQ = 1))
+  out <- c(list0, list1)
+  out
+}
+
+reachdata$Po %>%
+  prepdata() %>% 
+  optimizing(stanmodlog, data = ., as_vector = FALSE) %>% 
+  (function(x) x$par$A0)
+
+sscase %>%
+  prepdata() %>% 
+  optimizing(stanmodlog, data = ., as_vector = FALSE) %>% 
+  (function(x) x$par$A0)
+
+uscase %>%
+  prepdata() %>% 
+  optimizing(stanmodlog, data = ., as_vector = FALSE) %>% 
+  (function(x) x$par$A0)
+
+sssamps <- sscase %>%
+  prepdata() %>%
+  sampling(stanmodlog, data = ., chains = 3, cores = 3, iter = 10000)
+
+stan_trace(sssamps, par = "A0", inc_warmup = TRUE)$data %>%
+  # glimpse() %>%
+  ggplot(aes(x = iteration, y = value, color = chain, group = chain)) +
+  geom_line(size = 0.5) +
+  facet_wrap(~parameter, ncol = 2)
+
+stan_trace(sssamps, par = "Qn", inc_warmup = TRUE)$data %>%
+  # glimpse() %>%
+  ggplot(aes(x = iteration, y = value, color = chain, group = chain)) +
+  geom_line(size = 0.5) +
+  facet_wrap(~parameter, ncol = 2)
+
+ussamps <- uscase %>%
+  prepdata() %>%
+  sampling(stanmodlog, data = ., chains = 3, cores = 3, iter = 10000)
+
+stan_trace(ussamps, par = "A0", inc_warmup = TRUE)$data %>%
+  # glimpse() %>%
+  ggplot(aes(x = iteration, y = value, color = chain, group = chain)) +
+  geom_line(size = 0.5) +
+  facet_wrap(~parameter, ncol = 2)
+
+ussamps_adj <- uscase %>%
+  swot_timelag(c(0, -2, -4)) %>%
+  prepdata() %>%
+  sampling(stanmodlog, data = ., chains = 3, cores = 3, iter = 10000)
+
+stan_trace(ussamps_adj, par = "A0", inc_warmup = TRUE)$data %>%
+  # glimpse() %>%
+  ggplot(aes(x = iteration, y = value, color = chain, group = chain)) +
+  geom_line(size = 0.5) +
+  facet_wrap(~parameter, ncol = 2)
+
+```
+
+Now estimate for all Pepsi cases
+
+```{r}
+
+rddata <- reachdata %>% 
+  map(prepdata)
+
+rdsamps <- rddata %>% 
+  map(possibly(~sampling(stanmodlog, data = ., cores = 3, chains = 3, iter = 10000), 
+               otherwise = NA))
+
+rdpostmeans <- rdsamps %>% 
+  map(get_posterior_mean, par = "A0") %>% 
+  map(~.[, "mean-all chains"])
+s
+nulls <- map_lgl(rdpostmeans, is.null)
+
+trueA0_min <- reachdata %>% 
+  map(function(x) (x$A - rezero_dA(x$dA, zero = "minimum"))[, 1])
+
+makedf <- function(x, y) data.frame(est = x, truth = y)
+
+map2_lgl(rdpostmeans[!nulls], trueA0_min[!nulls], function(x, y) length(x) == length(y))
+
+compdf <- map2(rdpostmeans[!nulls], trueA0_min[!nulls], makedf) %>% 
+  bind_rows(.id = "case")
+
+ggplot(compdf, aes(x = est, y = truth)) +
+  geom_point(aes(color = case)) +
+  geom_abline(slope = 1, intercept = 0)
+
+```
+
+Check convergence
+
+```{r}
+rhats <- map(rdsamps, possibly(~stan_rhat(., "A0")$data, otherwise = NA))
+
+rhatdf <- rhats[!is.na(rhats)] %>%
+  bind_rows(.id = "case") %>% glimpse()
+
+# rhatdf_2k <- rhats[!is.na(rhats)] %>% 
+#   bind_rows(.id = "case") %>% glimpse()
+
+ggplot(rhatdf, aes(x = case, y = stat)) +
+  geom_boxplot() + 
+  geom_point()
+
+ggplot(rhatdf_2k, aes(x = case, y = stat)) +
+  geom_boxplot() + 
+  geom_point()
+
+
+plot(rhatdf$stat - rhatdf_2k$stat)
+```
+

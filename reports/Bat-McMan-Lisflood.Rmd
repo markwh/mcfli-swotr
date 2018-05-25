@@ -1,0 +1,280 @@
+---
+title: "Bat McMan - Lisflood"
+author: "Mark Hagemann"
+date: "March 29, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This document summarizes a series of experiments applying the Bat McMan bathymetry estimation method to output from a simple hydrodynamic model (Lisflood). The model consists of three uniform rectangular-channel reaches, each 10000 m in length. Two sets of boundary conditions were run through the model--one simulating steady-state conditions at a series of flow levels ranging from 50 to 300 cms, and the other simulating a storm hydrograph with a peak flow of 300 cms imposed on a baseflow of 50 cms. 
+
+A set of swot-like data at the reach-average scale was composed from the lisflood output. This comprised the SWOT-measurable variables height (H), width (W), slope (S) and partial cross-sectional area ($\delta A$), as well as the unobservable variables flow (Q), and bathymetric cross-sectional area ($A_0$). 
+
+### Method
+
+As described in a previous report, bathymetry was inferred by solving the folloing linear model for $\mathbf{a_0}$ via ordinary least-squares:
+
+$$
+\begin{bmatrix}
+\mathbf{X} \mathbf{\Omega_1} \\
+\mathbf{X} \mathbf{\Omega_2} \\
+\vdots \\
+\mathbf{X} \mathbf{\Omega_n}
+\end{bmatrix}
+ \mathbf{a}_0
+
+= 
+
+\begin{bmatrix}
+(-\delta \mathbf{A} \circ \mathbf{X}) \omega_1 \\
+(-\delta \mathbf{A} \circ \mathbf{X}) \omega_2 \\
+\vdots \\
+(-\delta \mathbf{A} \circ \mathbf{X}) \omega_n
+
+\end{bmatrix}
+$$
+
+where:
+
+- $\mathbf{X}$ is a matrix whose $i,t$th component is $x_{it} = \Big(\frac{1}{n} W_{it}^{-2/3} S_{it}^{1/2} \Big)^{3/5}$
+- $\mathbf{a_0}$ is a column vector of $A_0$ values
+- $\mathbf{\delta A}$ is a matrix of $\delta A$ values
+- $\omega_j, j = 1, \dots, n$ are unique weight vectors whose elements sum to zero (this ensures mass conservation across reaches).  
+- $\Omega_j$ is the diagonal matrix composed from the vector $\omega_j$
+- $\circ$ denotes the elementwise product. 
+
+### Description of cases
+
+As described above, two different sets of boundary conditions yield steady- and non-steady-state SWOT-like datasets. The steady-state dataset consists of 9 times, corresponding uniquely to the flow conditions 50, 75, 100, 125, 150, 175, 200, 250, and 300 cms (Figure ####). The storm dataset consists of 77 times, representing a high-temporal sampling along the rising and falling limb of a storm hydrograph (Figure ####)
+
+```{r}
+
+is_ss <- function(...) {
+  arglist <- list(...)
+  ssvars <- map(arglist, function(x) c(1, diff(x))) %>% 
+    map(function(x) x == 0) %>% 
+    Reduce(`*`, x = .)
+  out <- as.logical(ssvars)
+  out
+}
+
+sscase <- lis_profiles("../lisflood/toy_1/results_const_v2/") %>% 
+  lis_reaches(slope_method = "s_median", agfun = median) %>% 
+  filter(loc != 4) %>%
+  arrange(loc, time) %>% 
+  group_by(loc) %>% 
+  mutate(steady = is_ss(W, S, Q, H, D)) %>% 
+  group_by(time) %>% 
+  filter(sum(steady) == 3) %>% 
+  group_by(Q) %>% 
+  filter(time == time[1]) %>% 
+  mutate(A = W * D) %>% 
+  select(-steady) %>% 
+  swot_untidy()
+
+estA0(sscase)
+
+val_log_termplot(sscase)
+# 
+# foo <- swot_tidy(sscase)
+# glimpse(foo)
+```
+
+
+```{r}
+uscase <- lis_profiles("../lisflood/toy_1/results_simple_v2/") %>% 
+  lis_reaches(slope_method = "s_mean", agfun = mean) %>% 
+  filter(loc != 4) %>%
+  mutate(A = W * D) %>% 
+  swot_untidy() %>% 
+  swot_sset(keeptimes = -1:-20)
+
+swot_plot(uscase, c("Q", "W", "dA", "S"))
+```
+
+Note that in the storm case the flood wave propogation results in considerable spatial variability in flows, such that applying a time shif to reaches 2 and 3 would result in something closer to uniform flow. A separate case was created by applying an optimal shift, as follows:
+
+1. Estimate A0 using the original, unshifted data
+2. Compute the cross-correlation function between reach 1 and each of the other reaches, and obtain the best lag as that which results in the largest cross-correlation for each pair of reaches.
+3. Shift the reaches by the optimal lags determined in step 2 (reach 1 is not shifted)
+4. Re-estimate A0 using the shifted data
+5. Repeat steps 2 through 4 until the optimal lags are all zero (indicating convergence) or a maximum number of iterations is reached. 
+
+Applied to the storm case, this resulted in a shifted dataset with lags of -1 and -4 for reaches 2 and 3, respectively. This resulted in a dataset with considerably less spatial heterogeneity in flow (Fig. ####)
+
+```{r}
+shiftcase <- uscase %>% 
+  # swot_timelag(lags = c(0, -2, -4))
+  ccf_lag(verbose = TRUE)
+
+swot_plot(shiftcase, c("Q", "W", "dA", "S"))
+
+manning_qdot(shiftcase, Avar = "A", log = TRUE) %>% 
+  plot_DAWG()
+```
+
+
+
+### Results
+
+```{r}
+realA0_ss <- apply(sscase$A, 1, min)
+realA0_us <- apply(uscase$A, 1, min)
+A0hat_ss <- estA0(sscase)
+A0hat_us <- estA0(uscase)
+A0hat_us_shift <- estA0(shiftcase)
+
+allA0 <- list(real = realA0_ss, ss = A0hat_ss, us = A0hat_us, us_shift = A0hat_us_shift) %>% 
+  as.data.frame() %>% 
+  mutate(reach = as.factor(1:3)) %>% 
+  gather(key = case, value = A0, -reach)
+
+allA0 %>% 
+  # glimpse() %>% 
+  ggplot(aes(x = case, y = A0, color = reach)) + 
+  geom_point(position = position_dodge(width = 0.2)) +
+  theme_bw()
+  
+```
+
+While the steady-state case yielded near-perfect inference of A0, the two unsteady cases were off by roughly 100%--and in opposite directions! This indicates two things--first, that steady-state conditions are important to accurate A0 inference, and second, that A0 estimates are highly variable in unsteady-state conditions, at least with regard to the amount of time lag applied. 
+
+### Exploration of variability
+
+In order to investigate the degree of variability in A0 estimates, 
+
+```{r}
+# Bootstrap A0 by selecting times
+
+casei <- uscase %>% 
+  swot_timelag(c(0, -1, -4))
+
+cols <- 1:ncol(casei$W)
+sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE))
+boot_cases <- map(sampcollist, ~swot_sset(casei, keeptimes = ., keeplocs = c(1, 2, 3)))
+boot_A0 <- map(boot_cases, estA0)
+
+boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+boot_lms <- map(boot_cases, estA0_lm)
+boot_R2 <- map_dbl(boot_lms, A0_R2)
+boot_condno <- map_dbl(boot_lms, A0_condno)
+
+boot_df <- boot_A0 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(boot_nunique, ~mutate(.x, nunique = .y)) %>% 
+  map2(boot_R2, ~mutate(.x, R2 = .y)) %>% 
+  map2(boot_condno, ~mutate(.x, condno = .y)) %>% 
+  bind_rows(.id = "sampno")
+
+boot_df %>%
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>%
+  # filter(nunique > 7) %>%
+  ggplot(aes(x = reach, y = A0_estimate, color = R2)) +
+  geom_point(position = position_jitterdodge()) +
+  scale_colour_viridis_c()
+
+boot_df %>% 
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = R2, y = A0_estimate, color = reach)) +
+  geom_point()
+
+boot_df %>% 
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = condno, y = A0_estimate, color = reach)) +
+  geom_point()
+
+boot_df %>% 
+  gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = condno, y = R2, color = reach)) +
+  geom_point()
+```
+
+That is not as I expected for sscase. Is that because it's repeating hydrologic conditions?
+
+```{r}
+
+casei <- sscase
+
+cols <- 1:ncol(casei$W)
+sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE)) %>% 
+  map(unique)
+boot_cases <- map(sampcollist, ~swot_sset(casei, keeptimes = .))
+boot_A0 <- map(boot_cases, estA0)
+
+boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+
+boot_df <- boot_A0 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(boot_nunique, ~mutate(.x, nunique = .y)) %>% 
+  bind_rows(.id = "sampno")
+
+boot_df %>%
+  gather(key = reach, value = A0_estimate, -sampno, -nunique) %>%
+  # filter(nunique > 7) %>%
+  ggplot(aes(x = reach, y = A0_estimate, color = as.factor(nunique))) +
+  geom_point(position = position_jitterdodge()) +
+  scale_colour_viridis_d()
+  # geom_violin()
+```
+
+This is crazy! Just to verify, prune one flow point manually and rerun.
+
+```{r}
+sscase2 <- sscase
+
+A0s2 <- list()
+
+for (j in 1:9) {
+  remtime <- j
+  for (i in 1:length(sscase)) {
+    sscase2[[i]] <- sscase[[i]][, -remtime]
+  }
+  A0s2[[j]] <- estA0(sscase2)
+}
+
+foogg <- A0s2 %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(1:9, ~mutate(.x, j = .y)) %>% 
+  bind_rows() %>% 
+  gather(key = reach, value = A0, -j) %>% 
+  ggplot(aes(x = reach, y = A0, color = j)) +
+  geom_point()
+
+plotly::ggplotly(foogg)
+```
+
+It seems like the exactitude of the steady-state A0 estimate was a happy accident afforded by the specific flows in the dataset. 
+
+```{r}
+swot_sset(sscase, keeptimes = -9) %>%
+  # swot_plot()
+  # A0_condno()
+  # val_nd_plot() + geom_line() + xlim(0, 1.4)
+  # val_linA_plot()
+  manning_ws35() %>% t() %>% pairs()
+  # val_log_termplot(scales = "free_x")
+  # estA0_lm() %>% 
+  # markstats::ggTermPlot(xvar = "x2") +
+  # ylim(-2, 2)
+
+sscase %>% 
+  # swot_plot()
+  # A0_condno()
+  # val_nd_plot() + geom_line() + xlim(0, 1.4)
+  # val_linA_plot()
+  manning_ws35() %>% t() %>% pairs()
+  # val_log_termplot(scales = "free_x")
+  # estA0_lm() %>% 
+  # markstats::ggTermPlot(xvar = "x2") +
+  # ylim(-2, 2)
+
+```
+
+While the method is simple (linear regression), the quantities involved are abstract, and the results can be perplexing. This document is an attempt to demonstrate the method and elucidate the 
+

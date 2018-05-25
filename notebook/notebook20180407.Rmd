@@ -1,0 +1,280 @@
+---
+title: "notebook20180407"
+author: "Mark Hagemann"
+date: "April 7, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Still struggling with how to handle "error in variables" model. But I'm making progress by stripping things down to components. Starting with closure term. I have that math jotted down, but good to put it in tex form here. Important parts:
+
+
+$$
+(Q_{t} \bar{n}_{\cdot t})^{3/5} = A_{it} (W_{it}^{-2/3} S_{it}^{1/2} \dot{n}_{it}^{-1})^{3/5}
+$$
+
+where:
+
+- $\bar{n}_{\cdot t} \times \dot{n}_{it} = c_{it}$
+- $c_{it} = \frac{1}{Q_t} A_{it}^{5/3} W_{it}^{-2/3} S_{it}^{1/2}$ 
+
+Note that:
+
+- space-invariant (mass-conserved) part is on left-hand side
+    - Any averaging function can be used for to transfer $Q_{it}$ to $Q_t$.  
+- RHS of course must also be mass-conserved, but here that is accomplished by complicated product of quantities that do vary in time (including closure term)
+- closure term $c_{it}$ encompasses multiple sources of error, including:
+    - Spatial variability in Manning's n (could be accounted for via $\dot{n}$)
+    - Temporal (e.g. depth) variability in Manning's n
+    - Flow imbalance (not mass conserved and/or not steady state)
+    - Manning equation error
+    
+Now I still need to apply this to get the following:
+
+$$
+\mathbf{W = X + U}
+$$
+
+Where W is observed, X is real, and U is error. 
+
+Suppose I try to use W, S, and dA observations to estimate A0. Assume no measurement error. No a priori $\dot{n}_{it}$. Then what is W and what is U? W is ws35 %*% Omega. X could be ws35 / closure, but this would be very different from W. But I can scale ws35 / closure by multiplying it by anything that preserves conservation of mass (steady-state). That means I can mutliply ws35 / closure by any matrix created from an arbitrary time vector. Optimally I would do this to match row means of W. 
+
+```{r}
+casei <- sscase
+
+wmati <- manning_ws35(casei)
+closi <- manning_closure(casei)
+xmati_1 <- wmati * closi ^ (-3/5)
+
+```
+
+Verify that algorithm works for X. 
+
+```{r}
+summary(estA0_lm_ws35(xmati_1, casei$dA))
+```
+
+Good. Now modify X to match row means of W. 
+
+```{r}
+rmeans_W <- apply(wmati, 2, mean)
+rmeans_X <- apply(xmati_1, 2, mean)
+xmati_2 <- xmati_1 * swot_vec2mat(rmeans_W / rmeans_X, xmati_1)
+```
+
+Plot and verify similarity. Also verify performance of new X matrix. 
+
+```{r}
+plot_DAWG(xmati_1)
+plot_DAWG(xmati_2)
+plot_DAWG(wmati)
+```
+
+That much is good. Now does it work?
+
+```{r}
+summary(estA0_lm_ws35(xmati_2, casei$dA))
+```
+
+Yes! Now what I really need is difference after it's been multiplied by omega. 
+
+```{r}
+omegaProduct <- function(ws35mat, symmetric = FALSE) {
+  omegas <- make_omegas(nrow(ws35mat), symmetric = symmetric)
+  out <- map(omegas, function(x) t(ws35mat) %*% diag(x)) %>% 
+    Reduce(rbind, .)
+  out
+}
+
+truewmat <- omegaProduct(wmati, symmetric = TRUE)
+truexmat <- omegaProduct(xmati_2, symmetric = TRUE)
+trueumat <- truexmat - truewmat
+```
+
+How does U behave?
+
+```{r}
+mean(truexmat)
+mean(truewmat)
+mean(trueumat)
+
+sd(truexmat)
+sd(truewmat)
+sd(trueumat)
+```
+
+Doesn't quite have zero mean! Which is to be expected. 
+
+```{r}
+pairs(trueumat)
+```
+
+Not quite independent either. But close enough. 
+
+What if I use symmetric omegas? Then will it have same mean? Yes! And mean will always be zero! 
+
+- Later on I may need to revisit this, since I'm artificially increasing the number of rows in the data matrix, without adding any further information. 
+
+Do I have a way to quickly get the U matrix from a given W matrix? 
+
+- Not yet. What should it do?
+- Given a ws35 matrix, calculate the truth matrix that has the same mean row-by-row.
+- Rely on manning_closure function.
+
+```{r}
+
+# Obsmat should be a WS35 matrix, and by default will be calculated as ws35 for 
+# the supplied swotlist. The output will be coerced to have the same row-by-row 
+# mean as obsmat. 
+
+manning_linA_closed <- function(swotlist, obsmat = NULL, adjust = TRUE) {
+  if (is.null(obsmat)) {
+    obsmat <- manning_ws35(swotlist = swotlist)
+  }
+  clos <- manning_closure(swotlist)
+  xmat <- obsmat * closi ^ (-3/5)
+  
+  rmeans_W <- apply(obsmat, 2, mean)
+  rmeans_X <- apply(xmat, 2, mean)
+  
+  if (adjust) {
+    out <- xmat * swot_vec2mat(rmeans_W / rmeans_X, xmat)
+  } else {
+    out <- xmat
+  }
+  
+  out
+}
+
+xmat3 <- manning_linA_closed(casei)
+
+op3 <- omegaProduct(xmat3, symmetric = TRUE)
+
+op3.1 <- omegaProduct(manning_ws35(casei), symmetric = TRUE)
+
+summary(op3)
+summary(op3.1)
+```
+
+Now I can make the closure!
+
+```{r}
+manning_linA_closure <- function(swotlist, obsmat = NULL) {
+  if (is.null(obsmat)) {
+    obsmat <- manning_ws35(swotlist = swotlist)
+  }
+  
+  closedmat <- manning_linA_closed(swotlist = swotlist, obsmat = obsmat)
+  out <- closedmat - obsmat
+  out
+}
+```
+
+OK, *now* can I do the simulation? Almost. Where does the error magnitude stand currently?
+
+```{r}
+sd(omegaProduct(manning_linA_closure(casei)))
+sd(omegaProduct(manning_ws35(casei)))
+
+```
+
+Really small, apparently! Am I sure this closure works?
+
+```{r}
+(manning_linA_closure(casei) + manning_ws35(casei)) %>% 
+  estA0_lm_ws35(dAmat = casei$dA) %>% 
+  summary()
+
+(manning_ws35(casei)) %>% 
+  estA0_lm_ws35(dAmat = casei$dA) %>% 
+  summary()
+```
+
+Yup! It's all working! Figure out parameters of simulation study. 
+
+```{r}
+(manning_linA_closure(casei)) %>% 
+  # mean()
+  apply(1, mean)
+
+(manning_ws35(casei)) %>% 
+  # mean()
+  apply(1, mean)
+  
+(manning_linA_closure(casei)) %>% 
+  t() %>% 
+  pairs()
+```
+
+Definitely some dependency stucture here. Also column-wise means of closure matrix are not zero. But for simulation purposes I'll make everything zero-mean and independent. 
+
+Figure will plot sd of closure matrix against error in A0. I'll need to do a statistically large number of A0 inversions for each level of error. Do that tonight, then tomorrow work on doing similar for synthetic cases. 
+
+```{r}
+simsds <- 10^seq(-8, -2, length.out = 20) %>% 
+  rep(each = 100)
+
+nx <- nrow(casei$W)
+nt <- ncol(casei$W)
+
+simerrmats <- map(simsds, ~rnorm(nx * nt, 0, .)) %>% 
+  map(~matrix(., nrow = nx, ncol = nt))
+simwsmats <- map(simerrmats, ~(manning_linA_closed(casei) + .))
+
+simA0ests <- map(simwsmats, ~estA0_lm_ws35(., dAmat = casei$dA)) %>% 
+  map(~as.data.frame(as.list(coef(.)))) %>% 
+  bind_rows(.id = "simno")
+
+trueA0df <- data.frame(loc = c("x1", "x2", "x3"), A0true = c(100, 122.15, 100))
+
+simoutdf <- simA0ests %>% 
+  mutate(sd = simsds) %>% 
+  select(-simno) %>% 
+  gather(key = "loc", value = "A0est", -sd) %>% 
+  left_join(trueA0df, by = c("loc")) %>% 
+  mutate(relerr_pct = (A0true - A0est) / A0true * 100)
+```
+
+Now plot it and call it a night!
+
+```{r}
+simoutdf %>% glimpse() %>% 
+  mutate(absrelerr = abs(relerr_pct)) %>% 
+  # ggplot(aes(x = sd, y = relerr_pct)) +
+  ggplot(aes(x = sd, y = absrelerr)) +
+  geom_point() +
+  scale_x_log10() + 
+  scale_y_log10()
+```
+
+Last thing: Put actual error from sscase in there. 
+
+```{r}
+
+valdf <- data.frame(loc = c("x1", "x2", "x3"),
+                    sd = apply(manning_linA_closure(casei), 1, sd),
+                    A0est = estA0(casei)) %>% 
+  left_join(trueA0df, by = "loc") %>% 
+  mutate(relerr_pct = (A0true - A0est) / A0true * 100,
+         absrelerr = abs(relerr_pct))
+  
+
+
+simoutdf %>% glimpse() %>% 
+  mutate(absrelerr = abs(relerr_pct)) %>% 
+  # ggplot(aes(x = sd, y = relerr_pct)) +
+  ggplot(aes(x = sd, y = absrelerr)) +
+  geom_point() +
+  geom_point(data = valdf, color = "red", size = 5) +
+  scale_y_log10() +
+  scale_x_log10() +
+  theme_bw()
+
+# ggsave("../graphs/A0_ss_sim1_log.png")
+
+```
+
+Nice! That's a wrap! 

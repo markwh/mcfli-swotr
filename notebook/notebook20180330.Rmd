@@ -1,0 +1,44 @@
+---
+title: "notebook20180330"
+author: "Mark Hagemann"
+date: "March 30, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I've done a lot today in the reports/bat-mcman-... document. But I'm itching to see if condition number pruning makes a difference on the Pepsi 1 data, now that I've fixed the function.
+
+```{r}
+peplms <- reachdata %>% 
+  map(possibly(ccf_lag, otherwise = NULL)) %>% 
+  map(possibly(estA0_lm, otherwise = NULL))
+
+pepR2s <- map(peplms, possibly(A0_R2, otherwise = NULL))
+pepcondnos <- map(peplms, possibly(A0_condno, otherwise = NULL))
+
+pepA0s <- map(reachdata, possibly(function(x) x$A[, 1], otherwise = NULL))
+
+pepests <- reachdata %>% 
+  map(possibly(estA0, otherwise = NA))
+
+goodcases <- names(pepests[!is.na(pepests)])
+
+peprelerrs <- map2(pepA0s[goodcases], pepests[goodcases], function(x, y) (x - y) / x)
+
+relerrdf <- peprelerrs %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(pepcondnos[goodcases], ~mutate(.x, condno = .y)) %>% 
+  map2(pepR2s[goodcases], ~mutate(.x, R2 = .y)) %>% 
+  bind_rows(.id = "case") %>% 
+  gather(key = reach, value = relerr, -case, -condno, -R2, na.rm = TRUE)
+
+relerrdf
+
+pepgg <- relerrdf %>% glimpse() %>% 
+  ggplot(aes(x = condno, y = relerr)) + geom_point()
+pepgg
+```
+

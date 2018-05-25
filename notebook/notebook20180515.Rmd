@@ -1,0 +1,936 @@
+---
+title: "notebook20180515"
+author: "Mark Hagemann"
+date: "May 15, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I have a list of tasks. First make a simple likelihood-based model for a single pair of reaches. I can modify yesterday's function. 
+
+```{r}
+nllfun_v4 <-  function(swotlist, maxval = Inf) {
+  W <- swotlist$W
+  stopifnot(nrow(W) == 2)
+  S <- swotlist$S
+  X <- 2/3 * log(W) - 1/2 * log(S)
+  dA <- swotlist$dA
+  
+  llfun <- function(pars) {
+    A01 <- pars[1] 
+    A02 <- pars[2] 
+    logQn <- pars[3]
+    sigma <- pars[4]
+    
+    if (sigma <= 0) return(maxval)
+    
+    A0mat <- swot_vec2mat(c(A01, A02), dA)
+    A <- A0mat + dA
+    
+    mat1 <- (X - 5/3 * log(A) + logQn)^2 / (2 * sigma^2)
+    mat2 <- 5/3 * log(A)
+    const <- log(sqrt(2 * pi) * sigma)
+    
+    out <- sum(mat1 + mat2 + const)  
+    out
+  }
+  
+  grfun <- function(pars) {
+    A01 <- pars[1] 
+    A02 <- pars[2] 
+    logQn <- pars[3]
+    sigma <- pars[4]
+    
+    A0mat <- swot_vec2mat(c(A01, A02), dA)
+    A <- A0mat + dA
+    
+    dA0 <- 5 / (3 * sigma^2) * (-X + 5/3 * log(A) - logQn + sigma^2) / A
+    dlogQn <- - sigma^-2 * (-X + 5/3 * log(A) - logQn)
+    dsigma <- 1 / sigma - sigma^-3 * (-X + 5/3 * log(A) - logQn)^2
+    
+    grad <- c(sum(dA0[1, ]), sum(dA0[2, ]), sum(dlogQn), sum(dsigma))
+    grad
+  }
+  
+  attr(llfun, "gradfun") <- grfun
+  llfun
+}
+
+
+
+```
+
+
+Here's a version with a prior on sigma (half-gaussian):
+
+```{r}
+nllfun_v4.1 <-  function(swotlist, sigma_priorsd = 1) {
+  W <- swotlist$W
+  stopifnot(nrow(W) == 2)
+  S <- swotlist$S
+  X <- 2/3 * log(W) - 1/2 * log(S)
+  dA <- swotlist$dA
+  
+  llfun <- function(pars) {
+    A01 <- pars[1] 
+    A02 <- pars[2] 
+    logQn <- pars[3]
+    sigma <- pars[4]
+    
+    if (sigma <= 0) return(Inf)
+    
+    A0mat <- swot_vec2mat(c(A01, A02), dA)
+    A <- A0mat + dA
+    
+    mat1 <- (X - 5/3 * log(A) + logQn)^2 / (2 * sigma^2)
+    mat2 <- 5/3 * log(A)
+    const <- log(sqrt(2 * pi) * sigma)
+    
+    priorsum <- -dnorm(sigma, 0, sigma_priorsd, log = TRUE)
+    
+    out <- sum(mat1 + mat2 + const) + priorsum
+    
+    out
+  }
+  
+  
+  
+  llfun
+}
+
+foo <- nllfun_v4.1(swot_sset(sscase, keeplocs = 1:2))
+bar <- nllfun_v4(swot_sset(sscase, keeplocs = 1:2))
+optim(par = c(1000, 1000, 4, 2), foo)
+optim(par = c(1000, 1000, 4, 2), bar)
+```
+
+Great! After some minor debugging that seems to work like a charm! It still may be advantageous to manually specify the gradient, but wait until that becomes necessary. 
+
+Now test on Pepsi cases.
+
+```{r}
+rd_maxlik <- reachdata %>% 
+  map(swot_sset, keeplocs = 1:2) %>% 
+  map(nllfun_v4) %>% 
+  map(possibly(~optim(par = c(10000, 10000, 6, 3), fn = ., 
+                      control = list(maxit = 1000)), otherwise = NA))
+
+which(is.na(rd_maxlik))
+
+rd_maxlik$Connecticut
+rd_maxlik$MississippiDownstream
+
+map_dbl(rd_maxlik[!is.na(rd_maxlik)], ~.$convergence)
+
+rd_maxlik$SacramentoDownstream
+```
+
+Yeah, I should put in the gradient. OK, that should be done. Now test it out.
+
+```{r}
+bar <- nllfun_v4(swot_sset(reachdata$GaronneDownstream, keeplocs = 1:2), maxval = 1e10)
+foo <- nllfun_v4.1(swot_sset(sscase, keeplocs = 1:2))
+optim(par = c(1000, 1000, 4, 2), bar, control = list(maxit = 10000))
+optim(par = c(1000, 1000, 4, 2), foo, control = list(maxit = 10000))
+
+
+optim(par = c(1000, 1000, 4, 2), bar, method = "BFGS", 
+      gr = attr(bar, "gradfun"),
+      control = list(trace = 1))
+optim(par = c(1000, 1000, 4, 2), bar, method = "BFGS", 
+      # gr = attr(bar, "gradfun"),
+      control = list(trace = 1))
+optim(par = c(1000, 1000, 4, 2), bar, method = "CG", gr = attr(bar, "gradfun"),
+      control = list(trace = 2))
+
+optim(par = c(1000, 1000, 4, 2), fn = bar, gr = attr(bar, "gradfun"),
+      method = "L-BFGS-B",
+      control = list(trace = 3))
+
+
+gfun <- attr(bar, "gradfun")
+gfun(c(100, 100, 6, 10))
+
+gfun(c(100, 100, 0, 0.4))
+
+
+```
+
+Alright, gradient doesn't help much, and in some cases hurts. Better let the machine do its thing. 
+
+
+## Plotting functions
+
+```{r}
+swotlist <- reachdata$Po %>% 
+  swot_sset(keeplocs = c(1, 5))
+llfun <- nllfun_v4
+A01lim <- A02lim <- c(300, 25000)
+p <- c(10000, 10000, 10, 10)
+log = FALSE
+
+llplot1 <- function(swotlist, llfun, A01lim, A02lim, otherpars = "optim",
+                    log = FALSE, 
+                    p = c(10000, 10000, 10, 10), plot = TRUE, ...) {
+  
+  ll <- llfun(swotlist)
+  
+  if (otherpars == "optim") {
+    optims <- optim(par = p, fn = ll, ...)
+    if (!(optims$convergence == 0))
+      stop("Optimization did not converge")
+    otherpars <- optims$par[-1:-2]
+  } 
+  stopifnot(is.numeric(otherpars))
+  
+  
+  if (log) {
+    A01lim <- log(A01lim)
+    A02lim <- log(A02lim)
+    
+    A01vals <- exp(seq(A01lim[1], A01lim[2], length.out = 100))
+    A02vals <- exp(seq(A02lim[1], A02lim[2], length.out = 100))
+  } else {
+    A01vals <- seq(A01lim[1], A01lim[2], length.out = 100)
+    A02vals <- seq(A02lim[1], A02lim[2], length.out = 100)
+  }
+  
+
+  
+  pargrid <- expand.grid(A01 = A01vals, A02 = A02vals)
+  pargrid$logQn <- otherpars[1]
+  pargrid$sigma <- otherpars[2]
+  
+  parlist <- split(pargrid, f = 1:nrow(pargrid)) %>% 
+    map(unlist)
+  nllvec <- map_dbl(parlist, ll)
+  
+  pargrid$nll <- nllvec
+  
+  if (!plot) {
+    return(pargrid)
+  }
+  
+  out <- ggplot(pargrid, aes(x = A01, y = A02, z = nll, fill = nll)) +
+    geom_raster() +
+    geom_contour() +
+    scale_fill_viridis_c()
+  
+  if (log)
+    out <- out + scale_x_log10() + scale_y_log10()
+
+  out
+}
+
+
+
+llplot1(swotlist, nllfun_v4, A01lim, A02lim, log = FALSE, method = "BFGS")
+llplot1(swotlist, nllfun_v4, A01lim, A02lim, log = TRUE, method = "BFGS")
+
+```
+
+Now make some plots for various cases on hand. 
+
+```{r}
+getpars <- function(swotlist) {
+  W <- swotlist$W
+  stopifnot(nrow(W) == 2)
+  S <- swotlist$S
+  X <- 2/3 * log(W) - 1/2 * log(S)
+  dA <- swotlist$dA
+  A <- swotlist$A
+  
+  A0 <- (A - dA)[, 1]
+  
+  rhs <- log(W^(-2/3) * A^(5/3) * S^(1/2))
+  
+  logQn <- mean(rhs)
+  sigma <- sd(rhs)
+  
+  out <- list(A0 = A0, logQn = logQn, sigma = sigma)
+  out
+}
+
+sscase %>% 
+  swot_sset(keeplocs = c(1, 3)) %>% 
+  getpars
+
+ssgg <- sscase %>% 
+  swot_sset(keeplocs = c(1, 3)) %>% 
+  llplot1(llfun = nllfun_v4, 
+          # otherpars = c(1.709, 0.56),
+          A01lim = c(30, 500), A02lim = c(30, 500), 
+          p = c(300, 300, 5, 4), 
+          method = "BFGS",
+          control = list(maxit = 10000, trace = 2),
+          plot = TRUE)
+ssgg
+
+```
+
+Curious that sscase doesn't converge. Not enough times? 
+
+Returning now to Po case, now that I can manually specify other params. 
+
+```{r}
+foocase <- reachdata$Po %>% 
+  swot_sset(keeplocs = c(1, 5))
+getpars(foocase)
+llplot1(foocase, nllfun_v4, 
+        A01lim = c(300, 2000), A02lim = c(300, 3000), 
+        log = FALSE, otherpars = c(3.336, 0.573))
+```
+
+That looks to be perfect! So if I can get the other parameters, then it looks like I can estimate A0. But can I get the other parameters? I should make a nll function that has only a single A0, plus logQn and sigma. 
+
+```{r}
+# This version only uses a single A0. Gradient hasn't been verified. 
+nllfun_v4.2 <-  function(swotlist, maxval = Inf) {
+  W <- swotlist$W
+  S <- swotlist$S
+  X <- 2/3 * log(W) - 1/2 * log(S)
+  dA <- swotlist$dA
+  
+  llfun <- function(pars) {
+    A0 <- pars[1] 
+    # A02 <- pars[2] 
+    logQn <- pars[2]
+    sigma <- pars[3]
+    
+    if (sigma <= 0) return(maxval)
+    
+    A <- A0 + dA
+    
+    mat1 <- (X - 5/3 * log(A) + logQn)^2 / (2 * sigma^2)
+    mat2 <- 5/3 * log(A)
+    const <- log(sqrt(2 * pi) * sigma)
+    
+    out <- sum(mat1 + mat2 + const)  
+    out
+  }
+  
+  grfun <- function(pars) {
+    A0 <- pars[1] 
+    # A02 <- pars[2] 
+    logQn <- pars[2]
+    sigma <- pars[3]
+    
+    A <- A0 + dA
+    
+    dA0 <- 5 / (3 * sigma^2) * (-X + 5/3 * log(A) - logQn + sigma^2) / A
+    dlogQn <- - sigma^-2 * (-X + 5/3 * log(A) - logQn)
+    dsigma <- 1 / sigma - sigma^-3 * (-X + 5/3 * log(A) - logQn)^2
+    
+    grad <- c(sum(dA0), sum(dlogQn), sum(dsigma))
+    grad
+  }
+  
+  attr(llfun, "gradfun") <- grfun
+  llfun
+}
+
+foofun <- nllfun_v4.2(swotlist = swot_sset(reachdata$Po, keeplocs = -14))
+optim(par = c(3900, 10, 10), fn = foofun, 
+      # gr = attr(foofun, "gradfun"),
+      method = "BFGS",
+      control = list(maxit = 10000))
+```
+
+Try putting a prior on sigma. 
+
+```{r}
+nllfun_v4.3 <-  function(swotlist, sigma_priorsd = 1, maxval = Inf) {
+  W <- swotlist$W
+  S <- swotlist$S
+  X <- 2/3 * log(W) - 1/2 * log(S)
+  dA <- swotlist$dA
+  
+  llfun <- function(pars) {
+    A0 <- pars[1] 
+    # A02 <- pars[2] 
+    logQn <- pars[2]
+    sigma <- pars[3]
+    
+    if (sigma <= 0) return(maxval)
+    
+    A <- A0 + dA
+    
+    mat1 <- (X - 5/3 * log(A) + logQn)^2 / (2 * sigma^2)
+    mat2 <- 5/3 * log(A)
+    const <- log(sqrt(2 * pi) * sigma)
+ 
+    priorsum <- -dnorm(sigma, 0, sigma_priorsd, log = TRUE)
+ 
+    out <- sum(mat1 + mat2 + const) + priorsum
+    out
+  }
+  
+  llfun
+}
+
+barfun <- nllfun_v4.3(swotlist = swot_sset(reachdata$Po, keeplocs = -14))
+optim(par = c(3900, 10, 10), fn = barfun, 
+      # gr = attr(foofun, "gradfun"),
+      method = "BFGS",
+      control = list(maxit = 10000))
+```
+
+Now make a plot showing tradeoff of A0 vs logQn. 
+
+
+## EM algorithm approach
+
+I should have done this earlier!
+
+```{r}
+casei <- reachdata$Po
+# casei <- sscase
+
+
+logW <- log(casei$W)
+logS <- log(casei$S)
+dA <- casei$dA
+minA0 <- -apply(dA, 1, min) + 1
+ 
+A0i <- minA0 * 1 # initialize A0 vector
+
+for (i in 1:1000) {
+  Ai <- casei$dA + swot_vec2mat(A0i, casei$dA)
+  rhsi <- -2/3 * logW + 1/2 * logS + 5/3 * log(Ai)
+  
+  logQtni <- apply(rhsi, 2, mean)
+  # logQni <- mean(logQtni)
+  sigma1i <- apply(rhsi, 2, sd)
+  # sigma2i <- sd(sigma1i)
+  
+  mu_Ati <- 3/5 * (swot_vec2mat(logQtni, dA) + 2/3 * logW - 1/2 * logS)
+  sd_Ati <- 3/5 * sigma1i
+  # sd_A <- sd(log(Ai))
+  
+  
+  Anew <- exp(mu_Ati + sd_Ati^2 / 2)
+  # Anew <- exp(mu_Ati)
+  
+  A0new <- Anew - dA
+  
+  badinds <- A0new < swot_vec2mat(minA0, A0new)
+  A0new[badinds] <- swot_vec2mat(minA0, A0new)[badinds]
+  A0i <- apply(A0new, 1, mean)
+  
+  # A0new <- apply(Anew - dA, 1, mean)
+  # A0i <- map2_dbl(minA0, A0new, max)
+  
+  
+  lli <- map2_dbl(split(as.data.frame(t(mu_Ati)), 1:ncol(mu_Ati)), 
+              sd_Ati, ~sum(dnorm(unlist(.x), 0, .y, log = TRUE))) %>% 
+    sum()
+  
+  if (i %% 10 == 0) cat(i, mean(A0i), lli, "\n")
+  # A0i
+}
+
+```
+
+Doesn't look like straight-up EM is going to work with analytical maximization. I can, however, do univariate optimization within EM via optimize(). That would be a fun function to write. 
+
+```{r}
+
+casei <- reachdata$Po %>%
+  swot_sset (keeplocs = -14)
+# casei <- sscase
+
+
+logW <- log(casei$W)
+logS <- log(casei$S)
+X <- -2/3 * logW + 1/2 * logS
+dA <- casei$dA
+minA0 <- -apply(dA, 1, min) + 1
+ 
+A0i <- minA0 * 10 # initialize A0 vector
+
+for (i in 1:10000) {
+
+  # Calculate logQtn
+  Ai <- casei$dA + swot_vec2mat(A0i, casei$dA)
+  rhsi <- X + 5/3 * log(Ai)
+  logQtni <- apply(rhsi, 2, mean)
+  # sigma1i <- apply(rhsi, 2, sd)
+  
+  # Function to optimize over A0
+  nllfun <- function(A0, Xrow, dArow) {
+    A <- dArow + A0
+    rhs <- Xrow + 5/3 * log(A)
+    
+    # out <- sum((logQtni - rhs)^2 / (2 * mean(sigma1i^2)))
+    
+    out <- mean((logQtni - rhs)^2)
+    out
+  }
+  
+  optimsi <- data.frame(A0 = numeric(length(A0i)), sigsq = numeric(length(A0i)))
+  for (r in 1:nrow(logW)) {
+    optimr <- optimize(nllfun, interval = c(minA0[r], A0i[r] * 100),
+                       Xrow = X[r, ], dArow = dA[r, ])
+    optimsi$A0[r] <- optimr[["minimum"]]
+    optimsi$sigsq[r] <- optimr[["objective"]]
+  }
+  
+  A0i <- optimsi$A0
+  
+  if (i %% 100 == 0)
+    cat(i, mean(optimsi$A0), mean(optimsi$sigsq), "\n")
+}
+
+
+```
+
+Looks like it works!
+
+```{r}
+plot(A0i, apply(casei$A, 1, median)); abline(0, 1)
+plot(estA0(casei), apply(casei$A, 1, median)); abline(0, 1)
+```
+
+
+
+```{r}
+rhsmat <- (X + 5/3 * log(swot_vec2mat(A0i, X) + dA)) %>% 
+  exp()
+
+truerhsmat <- (X + 5/3 * log(casei$A)) %>% 
+  exp()
+
+plot_DAWG(rhsmat)
+plot_DAWG(truerhsmat)
+
+plot_DAWG(rhsmat - swot_vec2mat(apply(rhsmat, 2, mean), rhsmat))
+plot_DAWG(truerhsmat - swot_vec2mat(apply(truerhsmat, 2, mean), rhsmat))
+
+
+apply(rhsmat, 2, sd) %>% mean()
+apply(truerhsmat, 2, sd) %>% mean()
+
+apply(rhsmat, 2, sd) %>% max()
+apply(truerhsmat, 2, sd) %>% max()
+
+apply(rhsmat, 2, sd) %>% plot()
+apply(truerhsmat, 2, sd) %>% plot()
+
+```
+
+Works for sscase, but not for Po. Po pushes everything too high, because this tightens the rhs matrix beyond where it should reasonbly go. My instinct is that this needs to be fully Bayesian, since a max likelihood will always tighten the mass conservation too much. Let's take a break, then come back and work on gathering and tidying work done so far. 
+
+See what happens when I minimize in cartesian space.
+
+```{r}
+
+casei <- reachdata$Po %>%
+  swot_sset (keeplocs = -14)
+# casei <- sscase
+
+
+logW <- log(casei$W)
+logS <- log(casei$S)
+X <- -2/3 * logW + 1/2 * logS
+dA <- casei$dA
+minA0 <- -apply(dA, 1, min) + 1
+ 
+A0i <- minA0 * 1 # initialize A0 vector
+
+for (i in 1:10000) {
+
+  # Calculate logQtn
+  Ai <- casei$dA + swot_vec2mat(A0i, casei$dA)
+  rhsi <- X + 5/3 * log(Ai)
+  logQtni <- apply(exp(rhsi), 2, mean)
+  # sigma1i <- apply(rhsi, 2, sd)
+  
+  # Function to optimize over A0
+  nllfun <- function(A0, Xrow, dArow) {
+    A <- dArow + A0
+    rhs <- Xrow + 5/3 * log(A)
+    
+    # out <- sum((logQtni - rhs)^2 / (2 * mean(sigma1i^2)))
+    
+    out <- mean((logQtni - exp(rhs))^2)
+    out
+  }
+  
+  optimsi <- data.frame(A0 = numeric(length(A0i)), sigsq = numeric(length(A0i)))
+  for (r in 1:nrow(logW)) {
+    optimr <- optimize(nllfun, interval = c(minA0[r], A0i[r] * 100),
+                       Xrow = X[r, ], dArow = dA[r, ])
+    optimsi$A0[r] <- optimr[["minimum"]]
+    optimsi$sigsq[r] <- optimr[["objective"]]
+  }
+  
+  A0i <- optimsi$A0
+  
+  if (i %% 100 == 0)
+    cat(i, mean(optimsi$A0), mean(optimsi$sigsq), "\n")
+}
+
+```
+
+Converges right away, which makes sense. Now show that I can use the same approach to get the A0est result. 
+
+```{r}
+casei <- reachdata$Po %>%
+swot_sset (keeplocs = -14)
+# casei <- sscase
+
+
+W <- casei$W
+S <- casei$S
+X <- W^(-2/5) * S^(3/10) #* 1000
+dA <- casei$dA
+minA0 <- -apply(dA, 1, min) + 1
+ 
+A0i <- minA0 * rnorm(length(minA0), 10, 0.2) # initialize A0 vector
+
+for (i in 1:1000) {
+
+  Ai <- dA + swot_vec2mat(A0i, dA)
+  Qtni35 <- apply(Ai * X, 2, mean)
+  
+  
+  parenmat <- Ai * X - swot_vec2mat(Qtni35, X)
+  
+  # plot(Qtni35, type = "l")
+  
+  tss1 <- sum((Ai * X - swot_vec2mat(Qtni35, X))^2)
+  
+  
+  dAXbar <- apply(dA * X, 1, mean)
+  Xbar <- apply(X, 1, mean)
+  
+  A0i <- (mean(Qtni35) - dAXbar) / Xbar
+  # A0i <- (mean(Qtni35) - Xbar * apply(dA, 1, mean)) / Xbar
+  
+  Qtnmat <- swot_vec2mat(Qtni35, dA)
+  
+  # A0i <- apply(Qtnmat / X - dA, 1, mean)
+  A0i <- map2_dbl(A0i, minA0, max)
+  
+  tss2 <- sum(((dA + swot_vec2mat(A0i, X)) * X - swot_vec2mat(Qtni35, X))^2)
+  
+  if (i %% 100 == 0)
+    cat(i, mean(A0i), mean(Qtni35), tss1, tss2, "\n")
+}
+
+plot(Qtni35)
+
+
+# emsd <- apply(swot_vec2mat(Qtni35, X) - (Ai * X), 2, sd)
+# 
+# Ai_lm <- swot_vec2mat(estA0(casei), X) + casei$dA
+# 
+# lmsd <- apply(swot_vec2mat(Qtni35, X) - (Ai_lm * X), 2, sd)
+# 
+# plot(emsd, lmsd); abline(0, 1)
+
+```
+
+It converges as long as it starts in clos to the right place, but doesn't agree with A0est.
+
+```{r}
+plot_DAWG(Ai * X)
+
+plot_DAWG(casei$A * X)
+
+lmmat <- (swot_vec2mat(estA0(casei), X) + casei$dA) * X
+plot_DAWG(lmmat)
+
+apply(lmmat, 2, sd) %>% mean()
+apply(Ai * X, 2, sd) %>% mean()
+
+```
+
+
+Try a gradient version.
+
+```{r}
+
+linA_llfun <- function(swotlist) {
+  W <- swotlist$W
+  S <- swotlist$S
+  X <- W^(-2/5) * S^(3/10)
+  dA <- swotlist$dA
+  minA0 <- -apply(dA, 1, min) + 1
+  
+  objfun <- function(Qn, A0) {
+    
+    # if (sum(A0 < minA0) > 0) return(1e15)
+    # if (sum(Qn <= 0) > 0) return(1e15)
+    
+    A <- dA + swot_vec2mat(A0, dA)
+    Qn35 <- swot_vec2mat(Qn, dA)^(3/5)
+    objmat <- (A * X - Qn35)^2
+    obj <- sum(objmat)
+    obj
+  }
+  gradfun <- function(Qn, A0) {
+    A <- dA + swot_vec2mat(A0, dA)
+    Qnmat <- swot_vec2mat(Qn, dA)
+    Qngradmat <- 2 * (-3/5) * Qnmat^(-2/5) * (A * X - Qnmat^(3/5))
+    A0gradmat <- 2 * X * (A * X - Qnmat^(3/5))
+    
+    Qngrad <- apply(Qngradmat, 2, sum)
+    A0grad <- apply(A0gradmat, 1, sum)
+    
+    # Qngrad[Qn <= 0] <- -1e5
+    # A0grad[A0 < minA0] <- -1e5
+    
+    out <- list(Qn = Qngrad, A0 = A0grad) 
+    out
+  }
+  
+  out <- list(objfun = objfun, gradfun = gradfun)
+}
+
+
+
+
+gradclimb <- function(objfun, gradfun, initQn, initA0, alpha = 1) {
+  
+}
+
+```
+
+```{r}
+casei <- sscase
+ofi <- linA_llfun(casei)
+
+initQn <- rep(500 * 0.03, ncol(casei$W))
+initA0 <- rep(30, nrow(casei$W))
+
+
+Qn <- initQn
+A0 <- initA0
+alpha <- 1
+minQn <- 1 * 0.02
+minA0 <- -apply(casei$dA, 1, min) + 1
+
+for (i in 1:34) {
+  gradi <- ofi$gradfun(Qn = Qn, A0 = A0)
+  newQn <- Qn - gradi$Qn * alpha
+  
+  # newQn[newQn < minQn] <- minQn
+  
+  gradi <- ofi$gradfun(Qn = newQn, A0 = A0)
+  newA0 <- A0 - gradi$A0 * alpha
+  
+
+  
+  Qn <- newQn
+  # Qn[Qn < minQn] <- minQn
+  A0 <- newA0
+  # A0[A0 < minA0] <- minA0
+  
+  # if (i %% 10 == 0) 
+    cat(i, ofi$objfun(Qn, A0), mean(Qn), mean(A0), "\n")
+}
+
+
+
+```
+
+One where parameter is transformed Qn--avoids negative issue
+
+```{r}
+linA_llfun2 <- function(swotlist) {
+  W <- swotlist$W
+  S <- swotlist$S
+  X <- W^(-2/5) * S^(3/10)
+  dA <- swotlist$dA
+  minA0 <- -apply(dA, 1, min) + 1
+  
+  objfun <- function(Qn35, A0) {
+    
+    # if (sum(A0 < minA0) > 0) return(1e15)
+    # if (sum(Qn <= 0) > 0) return(1e15)
+    
+    A <- dA + swot_vec2mat(A0, dA)
+    Qn35mat <- swot_vec2mat(Qn35, dA)
+    objmat <- (A * X - Qn35mat)^2
+    obj <- sum(objmat)
+    obj
+  }
+  gradfun <- function(Qn35, A0) {
+    A <- dA + swot_vec2mat(A0, dA)
+    Qn35mat <- swot_vec2mat(Qn35, dA)
+    Qngradmat <- -2 * (A * X - Qn35mat)
+    A0gradmat <- 2 * X * (A * X - Qn35mat)
+    
+    Qngrad <- apply(Qngradmat, 2, sum)
+    A0grad <- apply(A0gradmat, 1, sum)
+    
+    # Qngrad[Qn <= 0] <- -1e5
+    # A0grad[A0 < minA0] <- -1e5
+    
+    out <- list(Qn35 = Qngrad, A0 = A0grad) 
+    out
+  }
+  
+  out <- list(objfun = objfun, gradfun = gradfun)
+}
+
+```
+
+
+
+```{r}
+casei <- sscase
+ofi <- linA_llfun2(casei)
+
+initQn <- rep(500 * 0.03, ncol(casei$W))
+initA0 <- rep(300, nrow(casei$W))
+
+Qn35 <- initQn^(3/5)
+A0 <- initA0
+alpha <- 1
+minQn <- 1 * 0.02
+minA0 <- -apply(casei$dA, 1, min) + 1
+
+oldobj <- ofi$objfun(Qn35 = Qn35, A0 = A0)
+
+for (i in 1:80) {
+  gradi <- ofi$gradfun(Qn35 = Qn35, A0 = A0)
+  newQn35 <- Qn35 - gradi$Qn35 * alpha
+  
+  if (sum(is.na(newQn35)) > 0) break()
+  
+  # newQn[newQn < minQn] <- minQn
+  
+  # gradi <- ofi$gradfun(Qn35 = newQn35, A0 = A0)
+  newA0 <- A0 - gradi$A0 * alpha
+  
+  Qn35 <- newQn35
+  # Qn[Qn < minQn] <- minQn
+  A0 <- newA0
+  # A0[A0 < minA0] <- minA0
+  
+  newobj <- ofi$objfun(Qn35 = Qn35, A0 = A0)
+  if (newobj > oldobj) {
+    # break
+    alpha <- alpha * 0.5
+    next
+  } else {
+    alpha <- alpha * 1.2
+  }
+  
+  oldobj <- newobj
+  # if (i %% 10 == 0) 
+    cat(i, newobj, mean(Qn35), mean(A0), alpha,  "\n")
+}
+
+Ai <- swot_vec2mat(A0, casei$dA) + casei$dA
+Xi <- casei$W^(-2/5) * casei$S^(3/10)
+rhsi <- Ai * Xi
+
+plot_DAWG(rhsi)
+
+newgrad <- ofi$gradfun(A0, Qn35 = Qn35)
+
+
+```
+
+This still isn't making sense. I need a version that I can let R optimize. 
+
+```{r}
+linA_llfun3 <- function(swotlist) {
+  W <- swotlist$W
+  S <- swotlist$S
+  X <- W^(-2/5) * S^(3/10)
+  dA <- swotlist$dA
+  minA0 <- -apply(dA, 1, min) + 1
+  
+  objfun <- function(pars) {
+    
+    # if (sum(A0 < minA0) > 0) return(1e15)
+    # if (sum(Qn <= 0) > 0) return(1e15)
+    
+    Qn35 <- pars[1:9]
+    A0 <- pars[10:12]
+    
+    A <- dA + swot_vec2mat(A0, dA)
+    Qn35mat <- swot_vec2mat(Qn35, dA)
+    objmat <- (A * X - Qn35mat)^2
+    obj <- sum(objmat)
+    obj
+    
+    
+    
+  }
+  out <- objfun
+}
+
+objfun3 <- linA_llfun3(sscase)
+
+inits <- c(setNames(rep(500, 9), paste0("mu", 1:9)), 
+           setNames(rep(30, 3), paste0("A0", 1:3)))
+foo <- optim(par = inits, objfun3, method = "BFGS", control = list(maxit = 500))
+foo <- optim(par = inits, objfun3, method = "CG", 
+             control = list(maxit = 50000))
+bar <- nlm(objfun3, p = inits, method = )
+```
+
+So that works! Why doesn't my gradient method? And why doesnt' my EM method?
+
+- It's got to be numerical. I can show that the solution they converge to has a small gradient--it's just not optimal. 
+
+How about a general-purpose minimizable function? I think I have an idea how.
+
+```{r}
+llfun4 <- function(swotlist) {
+  W <- swotlist$W
+  S <- swotlist$S
+  X <- W^(-2/5) * S^(3/10)
+  dA <- swotlist$dA
+  minA0 <- -apply(dA, 1, min) + 1
+  
+  times <- 1:ncol(X)
+  reaches <- 1:nrow(X)
+  
+  objfun <- function(pars) {
+    
+    # if (sum(A0 < minA0) > 0) return(1e15)
+    # if (sum(Qn <= 0) > 0) return(1e15)
+    
+    Qn35 <- pars[times]
+    A0 <- pars[max(times) + reaches]
+    
+    A <- dA + swot_vec2mat(A0, dA)
+    Qn35mat <- swot_vec2mat(Qn35, dA)
+    objmat <- (A * X - Qn35mat)^2
+    obj <- sum(objmat)
+    obj
+    
+  }
+  
+  initA0 <- apply(dA, 1, function(x) max(x) - min(x))
+  
+  initQn35 <- apply(X * (dA + swot_vec2mat(initA0, dA)), 2, mean)
+
+  out <- list(objfun = objfun, inits = c(initQn35, initA0))
+}
+
+casei <- reachdata$Po
+llfi <- llfun4(casei)
+
+optimi <- nlm(llfi$objfun, p = llfi$inits)
+
+```
+
+Works! nlm looks like the way to go. 
+
+Next: 
+
+- Meet Lark for lunch
+- Write up lisflood cases for blog
+- Make these results into functions, document
+- Package swotr functions, put on github

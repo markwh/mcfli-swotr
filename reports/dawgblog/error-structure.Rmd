@@ -1,0 +1,41 @@
+---
+title: "Error Structure"
+author: "Mark Hagemann"
+date: "May 14, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In previous posts, Mike and I have shown how a little measurement error can translate into large estimation error in McFli applications. But that is not the only kind of error out there. This post will discuss several forms of error, as well as how their structure may affect our ability to infer quantities of interest using SWOT-like data. 
+
+In modeling applications, error can typically be categorized into model error, parameter error, and measurement error. 
+
+Consider Mass-conserved Manning's equation, as represented by the following equation:
+
+$$
+Q_t n = (A_{0i} + \delta A_{it})^{5/3}W_{it}^{-2/3}S_{it}^{1/2}, i = 1, \dots N_r; t = 1, \dots, N_t
+$$
+
+What are the potential sources of error in this equation, and how, distributionally, are these errors likely to manifest? 
+
+### Closure error
+
+Assume for now that all measured quantities are known perfectly (no measurement error) and that Manning's equation holds perfectly at every reach. In this case error can arise from the inappropriately making the following assumptions:
+
+$$
+Q_{it} = Q_{i't}; n_{it} = n_{i't'},  i \neq i'; t \neq t' 
+$$
+
+That is, flow is conserved and at steady-state everywhere in the river section, and Manning's n does not vary in time or in space. The former may be violated during non-steady-state flow or if lateral (or, I suppose, vertical) in/outflows are nonzero. The latter may be violated if bed material changes significantly from reach to reach or due to depth-dependence of flow resistance (as Mike's group has shown). 
+
+This error can be represented as a multiplicative closure term, $c_{it}$ such that $\bar{Q_t}\bar{n} = c_{it}Q_{it}n_{it}$, where $\bar{Q_t}$ is spacially averaged flow and $\bar{n}$ is space- and time-averaged Manning's n. This closure term can then be decomposed into flow imbalance, $\gamma$, and n-variability, $\nu$: $\log c_{it} = \gamma_{it} + \nu_{it}$. Since we can, let's define $c_{it}$ to have zero mean in time and space. 
+
+
+
+
+### Measurement error
+
+### Model error

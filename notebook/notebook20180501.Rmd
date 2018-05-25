@@ -1,0 +1,127 @@
+---
+title: "notebook20180501"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This morning I'm diving in to the math on standardized regression with no intercept. I think it should work even with mean-adjusting the columns. Revisit my toy case from yesterday:
+
+```{r}
+verdf <- tibble(x1 = rnorm(300), x2 = x1 * 0.2 + rnorm(300), 
+                y = 0.4 * x1 + 0.8 * x2 + 0.1 + rnorm(300, 0, 1.5))
+
+verdf_sc <- as.data.frame(scale(verdf, center = FALSE)) # yesterday I set center = FALSE
+
+verlm <- lm(y ~ 0 + x1 + x2, verdf)
+
+verlm_sc <- lm(y ~ 0 + x1 + x2, verdf_sc)
+
+coef(verlm)
+
+
+# coef(verlm_sc) / c(sd(verdf$x1), sd(verdf$x2))
+
+# coef(verlm) / coef(verlm_sc)
+
+coef(verlm_sc) * sqrt(mean(verdf$y^2)) / c(sqrt(mean(verdf$x1^2)), sqrt(mean(verdf$x2^2)))
+# 
+coef(verlm_sc) * sd(verdf$y) / c(sd(verdf$x1), sd(verdf$x2))
+# 
+coef(verlm_sc) * sd(verdf$y) / c(sqrt(mean(verdf$x1^2)), sqrt(mean(verdf$x2^2)))
+# 
+coef(verlm_sc) * sqrt(mean(verdf$y^2)) / c(sd(verdf$x1), sd(verdf$x2))
+```
+
+Nothing doing here. As per handwritten work I arrive at the following:
+
+$$
+(X_*^TX_*)^{-1} = \frac{1}{n} \frac{1}{(1 + \mu_1^2)(1 + \mu_2^2) - (\rho + \mu_1 \mu_2)^2} 
+
+\begin{bmatrix}
+1 + \mu_2^2 & -\rho - \mu_1 \mu_2 \\
+ -\rho - \mu_1 \mu_2 & 1 - \mu_1^2
+\end{bmatrix}
+$$
+
+which is ugly, but could be tidied by approximation if $\mu_1, \mu_2 \ll |\rho|$.
+
+Ideas:
+
+- Subtract mean of y first (from both sides of equation). 
+- Make X symmetric by adding rows. 
+
+What is even y here? c from Mike's post. Equation 3. 
+
+It would be helpful if I had a way to go from my responses from yesterday to linear regression quantities. 
+
+Since I'm probably going to be making a new set of functions, it's time for a new prefix! Let's go with smf for simplest McFli?
+
+- OK! Got a few of those.
+
+
+```{r}
+rf1 <- sm_reachfun(n = 0.04, bw = 5, ss = 0.01, bs = 1e-4)
+rf2 <- sm_reachfun(n = 0.04, bw = 50, ss = 0.1, bs = 1e-4)
+
+Q1 <- rlnorm(100, 0, 1)
+
+rd1 <- rf1(Q1)
+rd2 <- rf2(Q1)
+
+sm_A0(rd1, rd2)
+sm_modmat(rd1, rd2)
+
+sl12 <- sm_swotlist(rf1, rf2, sort(Q1))
+swot_plot(sl12)
+```
+
+```{r}
+
+estA0(sl12, intercept = TRUE)
+```
+
+I mean, there's no intercept even when I allow there to be one, so this doesn't much matter. It's not squaring with my math though. 
+
+```{r}
+sm_modmat(rd1, rd2) %>% plot()
+```
+
+I think for now I should be happy with the fact that the intercept is negligible and is theoretically zero, even when allowed in the model. That makes the standardized version just *work*. 
+
+Moving on to my ideas for A0 likelihood. I have some math in my notebook. 
+
+
+```{r}
+testcase <- reachdata$Severn
+
+Mmat <- manning_ws35(testcase)
+
+testdA <- rezero_dA(testcase$dA, "minimum")
+rhsval <- function(i, j) {
+  # log(abs(Mmat[j, ] * testcase$dA[j, ] - Mmat[i, ] * testcase$dA[i, ])) -
+  #   log(abs(Mmat[i, ] - Mmat[j, ]))
+  log((Mmat[j, ] * testcase$dA[j, ] - Mmat[i, ] * testcase$dA[i, ]) /
+        (Mmat[i, ] - Mmat[j, ]))
+}
+
+ijdf <- as.data.frame(t(combn(1:nrow(Mmat), 2)))
+
+rhslist <- map2(ijdf[[1]], ijdf[[2]], rhsval)
+
+rhsvec <- unlist(rhslist)
+
+hist(rhsvec)
+
+exp(median(rhsvec, na.rm = TRUE))
+summary(rhsvec[is.finite(rhsvec)])
+
+geomMean(apply(testcase$A, 1, min))
+mean(log(apply(testcase$A, 1, min)))
+
+log(596.8)
+```
+
+I can try an iterative version! But first I need to prep for the meeting. (it's the next day btw.)

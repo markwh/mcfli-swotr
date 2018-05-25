@@ -1,0 +1,102 @@
+---
+title: "notebook20180410"
+author: "Mark Hagemann"
+date: "April 10, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Still trying to tease out effects of error (and specific parts of error structure) on A0 inversions. 
+
+I think it's time to add in distance and timelag information. This will allow me to approximate Q variability in space. 
+
+- This is likely to be a very crude estimate, and biased low, for long time intervals (since dA/dt will be smaller than it should be.)
+- Math is:
+
+$$
+\Delta Q \approx \frac{\Delta A}{\Delta t} \Delta x
+$$
+
+
+The objective is to get "characteristic values" for dA/dt for each river, then get the corresponding for Q variability. Then take 
+
+$$
+Qvar = sum(\Delta Q)
+$$
+
+Let's try it! How far back do I need to go to get this info?
+
+```{r}
+nclists$Connecticut$Reach_Timeseries.t
+nclists$Connecticut$River_Info.rch_bnd
+
+nci <- nclists$Connecticut
+dati <- reachdata$Connecticut
+tt <- nci$Reach_Timeseries.t
+xx <- nci$River_Info.rch_bnd
+xx <- (xx[-1] + xx[-length(xx)]) / 2
+xx <- xx[nci$River_Info.gdrch]
+
+dA <- apply(dati$dA, 1, diff)
+dt <- diff(tt * 3600 * 24)
+
+dQreal <- median(abs(apply(dati$Q, 2, diff)))
+
+dx <- diff(xx[-1] + xx[-length(xx)]) / 2
+
+dadt <- median(abs(dA / swot_vec2mat(dt, dA)))
+dQest <- dadt * sum(dx)
+
+dQreal
+```
+
+Doesn't look like a great estimate of dQ. I think I'm better off (somewhat) by estimating A0 and backing out dQ. 
+
+OK, I'm going to make a short writeup about dQ/dx = dA/dt validation. 
+
+Done with the analysis for now (to my satisfaction). Will need polishing before sharing, but that's for a later time. 
+
+
+### depth-variability of Manning's n
+
+Is this a relationship that can be transferred from one case to another?
+
+```{r}
+# nddf <- reachdata %>%
+#   map(possibly(val_anova_lm, otherwise = NULL)) %>% 
+#   map(tidy) %>% 
+#   bind_rows(.id = "case")
+
+nddf <- reachdata %>% 
+  map(~val_nd_plot(., plot = FALSE)) %>% 
+  bind_rows(.id = "case")
+
+ndlms <- nddf %>% 
+  filter(!is.na(loc), !is.na(logn), !is.na(logd)) %>% 
+  split(f = .$case) %>% 
+  map(~mutate(., loc = as.factor(loc))) %>% 
+  map(~lm(logn ~ logd + loc, .))
+
+ndevaldf <- ndlms %>% 
+  map(tidy) %>% 
+  bind_rows(.id = "case")
+
+ndevaldf %>%
+  filter(term == "logd") %>% 
+  glimpse() %>% 
+  ggplot(aes(x = case, y = estimate, ymin = estimate - 2 * std.error,
+             ymax = estimate + 2 * std.error)) +
+  geom_pointrange() +
+  theme(axis.text.x = element_text(angle = 90))
+
+```
+
+```{r}
+val_nd_plot(reachdata$SacramentoUpstream)
+
+plot_DAWG(manning_ndot(reachdata$SacramentoUpstream))
+```
+

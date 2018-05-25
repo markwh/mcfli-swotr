@@ -1,0 +1,563 @@
+---
+title: "notebook20180417"
+author: "Mark Hagemann"
+date: "April 17, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Got the Fuller book in the mail.
+
+- Check out equation 2.2.12. Apply this. 
+
+First look at MJ's data. 
+
+```{r}
+load("../../airSWOT/cache/est_po.RData")
+
+est_po %>% 
+  bam_qpred()
+
+```
+
+OK, now pull the validation data from the mat file. Going back to 0402 notebook. 
+
+```{r}
+povalin <- R.matlab::readMat("~/Downloads/gauge_all.mat")
+
+podsch <- povalin[[1]] %>% 
+  map(~.[[1]]) %>% 
+  map(as.data.frame) %>% 
+  map(~setNames(., c("Date", "stage", "level", "depth", "Q", "A"))) %>% 
+  bind_rows(.id = "reach") %>% 
+  transmute(Date = as.Date(Date, origin = "0000-01-01"),
+            Date = Date - 1, reach, 
+            H = level, D = depth, Q, A)
+
+glimpse(podsch)
+```
+
+And now the time to match things up. 
+
+```{r}
+timepo <- read.csv("~/Downloads/Time_Po.txt", sep = "\t", header = FALSE) %>% 
+  mutate(ndays = c(NA, diff(V1)))
+head(timepo)
+
+glimpse(timepo)
+
+```
+
+
+```{r}
+podata <- read_metroman("../../airSWOT/data/Po.txt")
+
+str(podata, 1)
+```
+
+```{r}
+
+ndays1 <- c(NA, diff(podata$days))
+ndays2 <- timepo$ndays
+
+ndays1 %>% head()
+ndays2 %>% head()
+
+all(ndays1 == ndays2, na.rm = TRUE)
+```
+
+I'll have to ask MJ about the number mismatch. But for now retrieve the validations. 
+
+```{r}
+podsch %>% 
+  glimpse()
+
+glimpse(timepo)
+library(lubridate)
+valdates <- with(timepo, ymd(paste(V2, V3, V4)))
+
+glimpse(valdates)
+
+
+valdata <- podsch %>% 
+  filter(Date %in% valdates) %>% 
+  select(Date, reach, Q)
+glimpse(valdata)
+
+valdata %>% 
+  mutate(gauge = reach) %>% 
+  ggplot(aes(x = Date, y = Q, color = gauge)) +
+  geom_line()
+ggsave("../graphs/Po_gaugedata.png")
+
+valdata %>% 
+  group_by(Date) %>% 
+  mutate(meanq = geomMean(Q), 
+         devQ = Q / meanq) %>% 
+  group_by(reach) %>% 
+  summarize(meanrat = median(devQ, na.rm = TRUE))
+  # ggplot(aes(x = Date, y = devQ, color = reach)) +
+  # geom_line()
+
+
+valdata %>% 
+  group_by(reach) %>% 
+  summarize(meanq = mean(Q, na.rm = TRUE))
+```
+
+
+```{r}
+po_estdf <- est_po %>% 
+  bam_qpred()
+
+glimpse(po_estdf)
+po_estdf$Date <- valdates[1:nrow(po_estdf)]
+
+po_estdf %>% 
+  ggplot(aes(x = Date, y = mean)) +
+  geom_line()
+ggsave("../graphs/Po_bampreds.png")
+
+```
+
+Now on to Fuller stuff while I wait for email response. 
+
+...
+
+OK, now I have the info. Use last 966 times.
+
+```{r}
+
+podates <- valdates[(length(valdates) - 965):length(valdates)]
+po_estdf$Date <- podates
+
+po_estdf %>% 
+  ggplot(aes(x = Date, y = mean)) +
+  geom_line()
+
+valdf <- valdata %>% 
+  filter(reach %in% c(3, 4)) %>% glimpse() %>% 
+  # filter(reach == 4) %>% 
+  group_by(Date) %>% 
+  summarize(Q = mean(Q, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  left_join(po_estdf, by = "Date") %>% 
+  filter(!is.na(mean)) %>% 
+  glimpse() 
+
+valdf %>% 
+  ggplot(aes(x = mean, y = Q)) +
+  geom_point() + 
+  geom_abline(aes(slope = 1, intercept = 0)) +
+  scale_y_log10(limits = c(100, 10000)) + 
+  scale_x_log10(limits = c(100, 10000)) +
+  theme_bw() +
+  xlab("predicted Q, cms") +
+  ylab("measured Q, cms")
+ggsave("../graphs/Po_val_scatter.png")
+  
+
+ggplot(valdf, aes(x = Date, y = Q)) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), fill = "lightblue") + 
+  # geom_line(color = "black") +
+  geom_point(color = "black", shape = "+") +
+  geom_line(linetype = 1, color = "darkgray", aes(y = mean)) +
+  scale_y_log10() +
+  theme_bw()
+ggsave("../graphs/Po_val_hgraph_logy.png")
+
+
+ggplot(valdf, aes(x = Date, y = Q)) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), fill = "lightblue") + 
+  # geom_line(color = "black") +
+  geom_point(color = "black", shape = "+") +
+  geom_line(linetype = 1, color = "darkgray", aes(y = mean)) +
+  # scale_y_log10() +
+  theme_bw()
+ggsave("../graphs/Po_val_hgraph_liny.png")
+
+
+RRMSE(pred = valdf$mean, meas = valdf$Q)
+NRMSE(pred = valdf$mean, meas = valdf$Q)
+NSE(pred = valdf$mean, meas = valdf$Q)
+rBIAS(pred = valdf$mean, meas = valdf$Q)
+```
+
+
+## Fuller theory applied
+
+Working towards 2.2.12.
+
+```{r}
+casei <- uscase
+# casei <- sscase
+
+wsobs <- manning_ws35(casei)
+wsreal <- manning_linA_closed(casei, obsmat = wsobs)
+
+xobs <- omegaProduct(wsobs, symmetric = TRUE)
+yobs <- omegaProduct_y(wsobs, dAmat = casei$dA, symmetric = TRUE)
+
+xreal <- omegaProduct(wsreal, symmetric = TRUE)
+yreal <- omegaProduct_y(wsreal, casei$dA, symmetric = TRUE)
+
+# covariance matrices
+
+mXX <- cov(xobs)
+siguu <- cov(xobs - xreal)
+
+mXY <- apply(xobs, 2, function(x) cov(x, yobs))
+sigue <- apply((xobs - xreal), 2, function(x) cov(x, yobs - yreal))
+
+betahat <- solve(mXX - siguu) %*% (mXY - sigue)
+betahat
+```
+
+That's closer than the original. Try it with manual no-mean variances.
+
+```{r}
+mXX <- 1 / nrow(xobs) * t(xobs) %*% xobs
+siguu <- cov(xobs - xreal)
+
+mXY <- apply(xobs, 2, function(x) cov(x, yobs))
+sigue <- apply((xobs - xreal), 2, function(x) cov(x, yobs - yreal))
+
+betahat <- solve(mXX - siguu) %*% (mXY - sigue)
+betahat
+```
+
+No better. 
+
+
+What if I do regression on case with x error removed, y error retained?
+
+```{r}
+solve(t(xreal) %*% xreal) %*% t(xreal) %*% yobs
+
+solve(t(xobs) %*% xobs) %*% t(xobs) %*% yobs
+```
+
+response errors are not well behaved. Look:
+
+```{r}
+plot(yobs - yreal)
+plot(yreal ~ yobs); abline(0, 1)
+plot(yreal - yobs ~ yobs)
+
+```
+
+How did this happen? Multiplicative errors! 
+
+$$
+y = \epsilon y^*
+$$
+
+I wonder if this is actually a larger contributor to error than x errors. 
+
+```{r}
+yerrcoef <- cor(yreal - yobs, yobs) * sd(yreal - yobs) / sd(yobs)
+yobs_adj <- yobs + (yerrcoef * yobs)
+
+plot(yobs_adj - yreal ~ yobs)
+```
+
+Now does the regression work?
+
+```{r}
+solve(t(xreal) %*% xreal) %*% t(xreal) %*% yobs_adj
+
+solve(t(xobs) %*% xobs) %*% t(xobs) %*% yobs_adj
+```
+
+This multiplicative error is a real downer. 
+
+How far did I get before considering multiplicative error decomposition?
+
+- Promising for uscase, but not fully formalized. This is worthwhile to push.
+- Should I consider dQ/dx in time and space, or dQ/dx in space and dQ/dt in time?
+    - Really I'm considering d(log gamma)/dx. And I should be doing something closer to dA/dt, if anything, in time.
+    
+Notation is hard to come up with!!! I think I should be using $\gamma, \nu$ as log-space quantities. So:
+
+$$
+n_{it}Q_{it} = \exp(\nu_{it} +  \gamma_{it})\bar{n}\bar{Q}_t 
+$$
+
+Then:
+
+$$
+\gamma_{it} = \Delta{x}_{it} {\gamma'_{\cdot t}} + \Delta t_{it} \gamma'_{i \cdot} + \epsilon_{it}
+$$
+
+Try that one on. Use $\Delta t = 1$
+
+```{r}
+gamanova_us <- casei %>% 
+  swot_gamma() %>% 
+  log() %>% 
+  apply(2, diff) %>%
+  apply(1, diff) %>% 
+  t() %>% 
+  `/`(apply(casei$x, 2, diff)) %>%
+  reshape2::melt() %>%
+  glimpse() %>% 
+  # summary()
+  lm(value ~ Var1 + Var2, data = .)
+
+summary(gamanova_us)
+```
+
+Need some finite difference functions (that preserve dimension). 
+
+```{r}
+findif_x <- function(dawgmat) {
+  difmat <- apply(dawgmat, 2, diff)
+  out1 <- rbind(difmat[1, ], difmat)
+  out2 <- rbind(difmat, difmat[nrow(difmat), ])
+  out <- (out1 + out2) / 2
+  out
+}
+
+findif_t <- function(dawgmat) {
+  difmat <- t(apply(dawgmat, 1, diff))
+  out1 <- cbind(difmat[, 1], difmat)
+  out2 <- cbind(difmat, difmat[, ncol(difmat)])
+  out <- (out1 + out2) / 2
+  out
+}
+
+
+
+```
+
+
+Now try that anova again. 
+
+```{r}
+casei <- reachdata$Po
+# casei <- uscase
+
+casei %>% 
+  swot_gamma() %>% 
+  log() %>% 
+  plot_DAWG()
+
+casei %>% 
+  swot_gamma() %>% 
+  log() %>% 
+  findif_x() %>% 
+  `/`(findif_x(casei$x)) %>% 
+  apply(2, mean) %>% 
+  swot_vec2mat(casei$x) %>% 
+  `*`((casei$x) - median(casei$x)) %>%
+  plot_DAWG()
+  
+
+```
+
+```{r}
+# casei <- uscase
+casei <- reachdata$Po
+
+dgdx <- casei %>% 
+  swot_gamma() %>% 
+  log() %>% 
+  findif_x() %>% 
+  `/`(findif_x(casei$x)) %>% 
+  apply(2, mean) %>% 
+  swot_vec2mat(casei$x)
+
+dgdt <- casei %>% 
+  swot_gamma() %>% 
+  log() %>% 
+  findif_t() %>% 
+  apply(1, mean) %>% 
+  swot_vec2mat(casei$x)
+
+deltax <- casei$x - mean(casei$x)
+
+deltat <- 1:ncol(casei$W) %>% 
+  `-`(mean(.)) %>% 
+  swot_vec2mat(casei$x)
+
+gammahatx <- dgdx * deltax
+gammahatt <- dgdt * deltat
+gammahat <- gammahatx + gammahatt
+
+gammareal <- casei %>% 
+  swot_gamma() %>% 
+  log()
+plot(gammahat, gammareal); abline(0, 1)
+plot(gammahatx, gammareal); abline(0, 1)
+plot(gammahatt, gammareal); abline(0, 1)
+```
+
+Works for dg/dx, not dg/dt. Why? dQ/dx is likely to be constant in space. Is dQ/dt not likely to be constant in time? Hell no!
+
+
+```{r}
+plot(exp(gammareal), exp(gammahatx))
+abline(0, 1)
+```
+
+What's distribution of dg/dx?
+
+```{r}
+qqnorm(dgdx[1, ])
+hist(dgdx[1, ])
+```
+
+
+```{r}
+dgdx_vec <- function(swotlist) {
+  swotlist %>% 
+    swot_gamma() %>% 
+    log() %>% 
+    findif_x() %>% 
+    `/`(findif_x(swotlist$x)) %>% 
+    apply(2, mean)
+}
+
+hist(dgdx_vec(reachdata$Po))
+hist(dgdx_vec(reachdata$Platte), breaks = 10)
+hist(dgdx_vec(reachdata$Severn))
+hist(dgdx_vec(reachdata$Connecticut))
+hist(dgdx_vec(reachdata$Cumberland))
+hist(dgdx_vec(reachdata$Wabash))
+hist(dgdx_vec(reachdata$Ganges))
+hist(dgdx_vec(reachdata$GaronneDownstream))
+hist(dgdx_vec(reachdata$GaronneUpstream))
+```
+
+So it's widespread, present to different degrees. I still want to model this as normal, just for simplicity. Strange how similar the magnitudes are. 
+
+```{r}
+reachdata %>% 
+  map_dbl(~sd(dgdx_vec(.))) %>% 
+  sort()
+
+hist(dgdx_vec(reachdata$Connecticut))
+hist(dgdx_vec(reachdata$MississippiDownstream))
+
+```
+
+Actually not that similar!
+
+```{r}
+sd(dgdx_vec(uscase))
+sd(dgdx_vec(sscase))
+```
+
+uscase has larger dgdx magnitude than any of the Pepsi cases. sscase has smaller than any of them (no surprise).
+
+I need a new gamma decomposition function. Decompose into:
+
+- mean dgdx * deltax
+- resids
+
+Do resids vary by distance?
+
+```{r}
+decomp_gamma <- function (gammamat, xmat) {
+  
+    dgdx <- findif_x(gammamat) %>% 
+      `/`(findif_x(xmat)) %>% 
+      apply(2, mean) %>% 
+      swot_vec2mat(pattern = xmat)
+  
+    deltax <- apply(xmat, 2, function(x) x - mean(x))
+    gammahat <- deltax * dgdx
+    
+    gammaerr <- gammamat - gammahat
+    
+    out <- list(gammahat = gammahat, gammaerr = gammaerr, dgdx = dgdx[1, ])
+    out
+}
+```
+
+Now apply it!
+
+```{r}
+casei <- reachdata$Seine
+foo <- casei %>%
+  swot_gamma() %>% 
+  log() %>% 
+  decomp_gamma(xmat = casei$x)
+
+foo$gammaerr %>% as.vector() %>% var()
+foo$gammahat %>% as.vector() %>% var()
+
+plot_DAWG(foo$gammahat)
+plot_DAWG(foo$gammaerr)
+
+plot(foo$gammahat, foo$gammaerr)
+cor(as.vector(foo$gammahat), as.vector(foo$gammaerr))
+
+```
+
+Look at variances
+
+```{r}
+
+decomp_gamma_var <- function (gammamat, xmat) {
+  dg1 <- decomp_gamma(gammamat, xmat)
+  # out <- c(
+  #   gamma = var(as.vector(gammamat)), 
+  #   gammahat = var(as.vector(dg1$gammahat)),
+  #   resid = var(as.vector(dg1$gammaerr))
+  # )
+  
+  out <- var(as.vector(dg1$gammaerr)) / var(as.vector(gammamat))
+  out
+}
+
+casei <- reachdata$Po
+dgvari <- casei %>% 
+  swot_gamma() %>% 
+  log() %>% 
+  decomp_gamma_var(xmat = casei$x)
+dgvari
+
+dgi <- casei %>% 
+  swot_gamma() %>% 
+  log() %>% 
+  decomp_gamma(xmat = casei$x)
+
+plot(dgi$gammahat, casei %>% swot_gamma() %>% log()); abline(0, 1)
+
+plot_DAWG(dgi$gammahat)
+plot_DAWG(casei %>% swot_gamma() %>% log())
+
+
+
+xmats <- map(reachdata, ~.$x)
+reachdata %>% 
+  map(swot_gamma) %>% 
+  map(log) %>% 
+  map2_dbl(xmats, decomp_gamma_var) %>% 
+  sort()
+
+
+
+```
+
+OK, I think that's in good shape. Now why the bias in RHS errors?
+
+I expected:
+
+$$
+(\mathbf{M \circ \delta X}) \omega = (\mathbf{C \circ M \circ \delta X}) \omega + \epsilon
+$$
+
+where $\mathbf{C}$ is closure matrix. But this is clearly multiplicative error. Look at closure as function of y. 
+
+```{r}
+plot(manning_linA_closure(casei) ~ manning_ws35(casei))
+```
+
+
+

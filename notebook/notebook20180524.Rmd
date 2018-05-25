@@ -1,0 +1,282 @@
+---
+title: "notebook20180524"
+author: "Mark Hagemann"
+date: "May 24, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Working on Wilamette in-situ analysis. Going off of what Mike sent last night.
+
+The following block comes rom 0402 notebook.
+
+```{r}
+hc_h <- read.csv("../../A0_identifiability/data/HydraulicControlReaches/H.txt", 
+                 sep = "\t", header = FALSE) %>% 
+  as.matrix()
+hc_w <- read.csv("../../A0_identifiability/data/HydraulicControlReaches/W.txt", 
+                 sep = "\t", header = FALSE) %>% 
+  as.matrix()
+hc_s <- read.csv("../../A0_identifiability/data/HydraulicControlReaches/S.txt", 
+                 sep = "\t", header = FALSE) %>% 
+  as.matrix()
+hc_q <- read.csv("../../A0_identifiability/data/HydraulicControlReaches/Qobs.txt", 
+                 sep = "\t", header = FALSE) %>% as.matrix()
+hc_dA <- read.csv("../../A0_identifiability/data/HydraulicControlReaches/dA.txt", 
+                  sep = "\t", header = FALSE) %>% as.matrix()
+hc_x <- read.csv("../../A0_identifiability/data/HydraulicControlReaches/ReachBoundaries.txt", 
+                 sep = "\t", header = FALSE) %>% 
+  `[[`(1) %>% 
+  stats::filter(c(1/2, 1/2)) %>% 
+  na.omit()
+attributes(hc_x) <- NULL
+
+hclist <- list(H = hc_h, W = hc_w, S = hc_s, Q = hc_q, 
+               x = swot_vec2mat(hc_x, hc_w))
+hclist$dA <- calcdA_mat(w = hclist$W, h = hclist$H, zero = "minimum")
+
+# plot_DAWG(hclist$dA - hc_dA)
+
+swot_plot(hclist)
+```
+
+This gives me something to work with. How's A0 come out?
+
+```{r}
+estA0(hclist)
+estA0(hclist, weight = FALSE)
+```
+
+```{r}
+hclist$A <- hclist$dA + swot_vec2mat(estA0(hclist), hclist$dA)
+
+val_log_termplot(hclist)
+foo <- val_log_lm(hclist, mc = TRUE)
+summary(foo$V1) # I forget what this did.
+
+manning_dqdx(hclist)
+manning_closure(hclist) %>% plot_DAWG()
+
+```
+
+
+What if I estimate A0 using my new stan model (see 0522 notebook)?
+
+```{r}
+library(rstan)
+stanmodlog <- stan_model("../stan/A0_v4-1.stan")
+hclist %>% 
+  prepdata() %>% 
+  optimizing(stanmodlog, data = ., as_vector = FALSE) %>% 
+  (function(x) x$par$A0)
+
+wlmsamps <- hclist %>% 
+  prepdata() %>% 
+  sampling(stanmodlog, data = ., chains = 3, cores = 3, iter = 3000)
+
+stan_trace(wlmsamps, par = "A0", inc_warmup = TRUE)$data %>%
+  glimpse() %>%
+  filter(parameter %in% paste0("A0[", 1:8, "]")) %>% 
+  ggplot(aes(x = iteration, y = value, color = chain, group = chain)) +
+  geom_line(size = 0.5) +
+  facet_wrap(~parameter, ncol = 2)
+```
+
+
+Suppose A0 estimates are roughly 1 order of magnitude too low. 
+
+What if I subset data to more mass-conserved distances?
+
+```{r}
+hclist %>% 
+  swot_sset(keeplocs = 1:4) %>% 
+  estA0()
+
+hclist %>% 
+  swot_sset(keeplocs = 5:8) %>% 
+  estA0()
+```
+
+Try a bootstrap? Note: can't do this if I weight the regression. Need to add a toggle for this.  
+
+```{r}
+bootsamps <- map(1:1000, ~sample(1:16, size = 16, replace = TRUE))
+boot_nunique <- map_dbl(bootsamps, ~length(unique(.)))
+
+bootlists <- map(bootsamps, ~swot_sset(hclist, keeplocs = .))
+
+A0ests <- map(bootlists, estA0, weight = FALSE)
+
+A0estdf <- A0ests %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  bind_rows(.id = "bootsamp") %>% 
+  mutate(nunique = boot_nunique)
+
+head(A0estdf)
+
+A0estdf %>% 
+  gather(key = "reach", value = "A0est", -bootsamp, -nunique) %>% 
+  glimpse() %>% 
+  ggplot(aes(x = reach, y = A0est, color = as.factor(nunique))) +
+  geom_point(position = position_jitterdodge()) +
+  scale_color_viridis_d()
+```
+
+I added measurement error to the stan file (a new one--A0_v4-4.stan.) See how it does. 
+
+```{r}
+measerrmod <- stan_model("../stan/A0_v4-4.stan")
+
+testdata <- prepdata(swotlist = hclist)
+testdata$sigma_logS <- 0.5
+testdata$sigma_logW <- 0.1
+
+testopt <- optimizing(object = measerrmod, data = testdata, as_vector = FALSE)
+
+testopt$par$A0
+
+testsamps <- sampling(measerrmod, data = testdata, chains = 3, cores = 3)
+
+stan_trace(testsamps, par = "A0", inc_warmup = TRUE)$data %>%
+  glimpse() %>%
+  filter(parameter %in% paste0("A0[", 1:8, "]")) %>% 
+  ggplot(aes(x = iteration, y = value, color = chain, group = chain)) +
+  geom_line(size = 0.5) +
+  facet_wrap(~parameter, ncol = 2)
+stan_trace(testsamps, par = "A0", inc_warmup = TRUE)$data %>%
+  glimpse() %>%
+  filter(parameter %in% paste0("A0[", 9:16, "]")) %>% 
+  ggplot(aes(x = iteration, y = value, color = chain, group = chain)) +
+  geom_line(size = 0.5) +
+  facet_wrap(~parameter, ncol = 2)
+```
+
+
+I've revamped the dgdx and alpha version (v4-3.stan). Test this one out on uscase.
+
+```{r}
+dgdxmod <- stan_model("../stan/A0_v4-3.stan")
+
+usdata <- prepdata(uscase)
+usdata$x <- uscase$x[, 1]
+
+# usopt <- optimizing(dgdxmod, data = usdata, as_vector = FALSE)
+# usopt$par$A0
+# usopt$par$dgdx %>% plot()
+# usopt$par$alpha %>% plot()
+
+
+ussamps <- sampling(dgdxmod, data = usdata, chains = 3, cores = 3, iter = 10000)
+
+stan_trace(ussamps, par = "A0", inc_warmup = TRUE)$data %>%
+  glimpse() %>%
+  filter(parameter %in% paste0("A0[", 1:8, "]")) %>% 
+  ggplot(aes(x = iteration, y = value, color = chain, group = chain)) +
+  geom_line(size = 0.5) +
+  facet_wrap(~parameter, ncol = 2)
+
+get_posterior_mean(ussamps, par = "dgdx") %>% 
+  `[`(, "mean-all chains") %>% 
+  plot()
+
+get_posterior_mean(ussamps, par = "alpha") %>% 
+  `[`(, "mean-all chains") %>% 
+  plot()
+
+```
+
+How's this compare to version 4-1, with no dgdx term?
+
+```{r}
+ussamps_4.1 <- sampling(stanmodlog, data = usdata, chains = 3, cores = 3, iter = 10000)
+
+stan_trace(ussamps_4.1, par = "A0", inc_warmup = TRUE)$data %>%
+  glimpse() %>%
+  filter(parameter %in% paste0("A0[", 1:8, "]")) %>% 
+  ggplot(aes(x = iteration, y = value, color = chain, group = chain)) +
+  geom_line(size = 0.5) +
+  facet_wrap(~parameter, ncol = 2)
+
+```
+
+
+Checking Mike's estimates. He only use adjacent reaches. 
+
+```{r}
+foo <- estA0_lm(hclist)
+
+omegas <- make_omegas(nrow(hclist$W))
+omegarle <- map(omegas, ~rle(.)$values)
+rlecat <- map_chr(omegarle, ~paste0(., collapse = "")) %>% 
+  map_chr(~gsub("0$", "", .)) %>% 
+  map_chr(~gsub("^0", "", .)) %>% 
+  map_chr(~gsub("-", "", ., fixed = TRUE))
+
+rlelen <- map_dbl(rlecat, nchar)
+adjrows <- (rlelen == 2) %>% 
+  rep(each = ncol(hclist$W))
+
+foomod <- foo$model
+adjmod <- foomod[adjrows, ]
+
+coef(foo)
+
+lm(formula = formula(foo), data = adjmod)
+```
+
+That should be close enough. 
+
+### Swtiching gears
+
+Alright, I neet to take a more focused approach. Brainstorming things to push.
+
+- documentation for canonical error models, various approximations
+    - no closure error
+    - space-varying n (alpha --give this a better name, since I've been using alpha elsewhere)
+        - What was wrong with nu?
+    - depth-varying n
+    - dgdx time series
+- Characterize flow imbalance on different datasets
+    - Write, test, document, package functions for characterizing closure error
+    - sd(dgdx) * sd(x)
+- validation function inventory and documentation
+    - Should align with theory vis a vis error models
+- consolidation of synthetic datasets, generating functions
+    - align with different error models
+- Package up 3 A0 approaches: 
+    - linear model
+    - nonlinear optimization
+    - Bayesian estimation
+    
+
+
+Take 1st bit first. Canonical error models. I have some writing on this in reports/
+
+- closureTerm
+    - outdated model (gamma is in log space)
+        - OK, that's fixed.
+- mcman_closure_decomp
+    - written a couple days before closureTerm
+    - Out of date
+    - Start of a blog post
+- probabilisticModel
+    - Most recent
+    - Brief
+    - Contains closest thing to the current model (but with a pretty glaring error)
+    - Best candidate for documenting closure decomposition 
+- These are pretty slapdash. I could make a few documents, each with a different purpose:
+    - Brief math derivation, documentation
+        - modify from probabilisticModel DONE.
+        - But give it a new title. DONE. Now it's called "closure-decomp-math.Rmd"
+    - Validation on lisflood, Pepsi1
+        - Modify from closureTerm
+        - also needs new title
+    - Illustration of functions (vignette)
+        - Start from scratch
+    - Blog post
+        - Modify from mcman_closure_decomp
+        - Combine aspects of math derivation doc, validation doc
+        - Also include info from n_anova
