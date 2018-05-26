@@ -89,9 +89,20 @@ clos_decomp$err
 This leads to a universally applicable metric for flow imbalance. A rough appoximation of the amount of flow variability between two reaches of a given river segment is given by the product of the standard deviation of `dgdx` and that of `x`. 
 
 
+### ANOVA on closure. 
+
+We can inspect how much of the total closure error comes from the various terms in equation #### in a couple of ways.
+
+```{r}
+
+```
+
+
 ```{r}
 dQ_df <- c(reachdata, list(sscase = sscase, uscase = uscase)) %>% 
-  map(possibly(characterize_closure, otherwise = list(dQ_pct = NA_real_))) %>% 
+  map(swot_purge_nas) %>% 
+  map(possibly(~characterize_closure(., method = "anova"), 
+               otherwise = list(dQ_pct = NA_real_))) %>% 
   # `[`(!is.na(.)) %>%
   map_dbl(~.[["dQ_pct"]]) %>% 
   data.frame(case = names(.), dQ_pct = ., row.names = NULL)
@@ -102,6 +113,27 @@ dQ_df %>%
   geom_point() +
   theme(axis.text = element_text(angle = 90))
 
+plot_DAWG(manning_closure(reachdata$Cumberland, log = TRUE))
+
+manning_closure(reachdata$Cumberland, log = TRUE) %>% 
+  list(clos = .) %>% 
+  swot_tidy() %>% 
+  filter(time > 125, time < 145) %>% 
+  glimpse()
+```
+
+Let's look at a ribbon for anovas.
+
+```{r}
+anova1df <- c(reachdata, list(sscase = sscase, uscase = uscase)) %>% 
+  map(swot_purge_nas) %>% 
+  map(possibly(closure_anova, otherwise = data.frame())) %>% 
+  bind_rows(.id = "case")
+
+anova1df %>% 
+  ggplot(aes(x = case, y = pctTotVar, fill = piece)) +
+  geom_bar(stat = "identity", position = "stack") +
+  theme(axis.text = element_text(angle = 90))
 
 ```
 

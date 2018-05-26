@@ -1,9 +1,10 @@
 # McMan closure term functions. 
 
 
-# Calculates closure term from Manning equation. 
-# Naively this could be considered Manning's n, but it varies in time and space
-# Also includes model error and (by default) flow imbalance error. 
+#' Calculates closure term from Manning equation. 
+#' 
+#' Naively this could be considered Manning's n, but it varies in time and space
+#'   Also includes model error and (by default) flow imbalance error. 
 manning_closure <- function(swotlist, log = FALSE, mc = TRUE, mcfun = mean) {
   
   W <- swotlist$W
@@ -128,22 +129,13 @@ decomp_nu <- function(numat) {
 }
 
 
-decomp_gamma_var <- function (gammamat, xmat) {
-  dg1 <- decomp_gamma(gammamat, xmat)
-  # out <- c(
-  #   gamma = var(as.vector(gammamat)), 
-  #   gammahat = var(as.vector(dg1$gammahat)),
-  #   resid = var(as.vector(dg1$gammaerr))
-  # )
-  
-  out <- var(as.vector(dg1$gammaerr)) / var(as.vector(gammamat))
-  out
-}
-
-
-
 # Characterize closure term, as parameterized in 4/19 notebook
-characterize_closure <- function(swotlist) {
+characterize_closure <- function(swotlist, method = c("decomp", "anova")) {
+  method <- match.arg(method)
+  if (method == "anova") {
+    return(characterize_closure_anova(swotlist = swotlist))
+  }
+  
   gma <- manning_gamma(swotlist)
   gd <- decomp_gamma(gma, swotlist$x)
   
@@ -152,11 +144,22 @@ characterize_closure <- function(swotlist) {
   nu <- manning_nu(swotlist)
   nd <- decomp_nu(nu)
   
-  sig_alpha <- sd(nd$nuhat[, 1])
+  sig_nubar <- sd(nd$nuhat[, 1])
   sig_err <- sd(gd$gammaerr + nd$nuerr)
   dx <- sd(swotlist$x[, 1])
   
-  out <- data.frame(dgdx = sig_dgdx, alpha = sig_alpha, err = sig_err, 
+  out <- data.frame(dgdx = sig_dgdx, nuhat = sig_nubar, err = sig_err, 
+                    dx = dx, dQ_pct = sig_dgdx * dx * 100)
+  out
+}
+
+characterize_closure_anova <- function(swotlist) {
+  dx <- sd(swotlist$x[, 1])
+  coefs <- closure_coefs(swotlist)
+  sig_dgdx <- sd(coefs$dgdx, na.rm = TRUE)
+  sig_nubar <- sd(coefs$nubar)
+  sig_err <- sd(coefs$resids)
+  out <- data.frame(dgdx = sig_dgdx, nuhat= sig_nubar, err = sig_err,
                     dx = dx, dQ_pct = sig_dgdx * dx * 100)
   out
 }
@@ -175,6 +178,29 @@ closure_lm <- function(swotlist) {
   mod
 } 
 
+gamma_lm <- function(gammamat, xmat) {
+  
+  modmat <- swot_tidy(list(gamma = gammamat, x = xmat)) %>% 
+    group_by(time) %>% 
+    mutate(xbar = mean(x), xdev = x - xbar) %>% 
+    ungroup() %>% 
+    mutate(time = as.factor(time), loc = as.factor(loc))
+  contrasts(modmat$loc) <- contr.sum
+  
+  mod <- lm(gamma ~ time : xdev, data = modmat)
+  mod
+}
+
+nu_lm <- function(numat) {
+  
+  modmat <- swot_tidy(list(nu = numat)) %>% 
+    mutate(time = as.factor(time), loc = as.factor(loc))
+  contrasts(modmat$loc) <- contr.sum
+  
+  mod <- lm(nu ~ 0 + loc, data = modmat)
+  mod
+}
+
 closure_coefs <- function(swotlist) {
   mod <- closure_lm(swotlist)
   coefs <- coef(mod)
@@ -183,12 +209,34 @@ closure_coefs <- function(swotlist) {
   nubar <- c(nubar0, -sum(nubar0))
   dgdx <- coefs[-1:-nrow(swotlist$W)]
   
-  out <- list(logn = logn, nubar = nubar, dgdx = dgdx)
+  out <- list(logn = logn, nubar = nubar, dgdx = dgdx, resids = resid(mod))
   out
 }
 
 closure_anova <- function(swotlist) {
   mod <- closure_lm(swotlist)
-  out <- broom::tidy(mod)
+  anovadf <- broom::tidy(anova(mod)) %>% 
+    mutate(pctTotVar = sumsq / sum(sumsq) * 100)
+  
+  
+  out <- data.frame(piece = c("nuhat", "gammahat", "resid"),
+                    pctTotVar = anovadf$pctTotVar)
   out
 }
+
+closure_hat <- function(swotlist) {
+  closlm <- closure_lm(swotlist)
+  
+  swotdf <- swot_tidy(swotlist)
+  
+  if (nrow(swotdf) > nrow(closlm$model)) {
+    stop("closure probably has NA's. Try using swot_purge_nas first.\n")
+  }
+  
+  swotdf$closhat = predict(closlm)
+  newswotlist <- swot_untidy(swotdf)
+  out <- newswotlist$closhat
+  out
+}
+
+

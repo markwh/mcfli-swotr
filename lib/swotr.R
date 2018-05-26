@@ -205,6 +205,29 @@ calcdA_vec <- function(w, h, zero = c("first", "minimum", "median")) {
   dA
 }
 
+# Purge all times containing NA's
+swot_purge_nas <- function(swotlist, purge = c("times", "locs")) {
+  purge = match.arg(purge)
+  getnainds <- function(mat) {
+    which(is.na(mat), arr.ind = TRUE)
+  }
+  inddf <- purrr::map(swotlist, getnainds) %>% 
+    map(as.data.frame) %>% 
+    dplyr::bind_rows() %>% 
+    unique()
+  
+  if (nrow(inddf) == 0L) {
+    return(swotlist)
+  }
+  
+  if (purge == "times") {
+    out <- swot_sset(swotlist, keeptimes = -unique(inddf[[2]]))
+  } else {
+    out <- swot_sset(swotlist, keeplocs = -unique(inddf[[1]]))
+  }
+  
+  out
+}
 
 # Plot all variables, or a subset thereof, as timeseries
 

@@ -473,3 +473,112 @@ plot_DAWG(decompj$gammaerr) + ggtitle("remainder of gamma term (epsilon)")
 - Do similar simulations to earlier, random-noise experiment
 - Bayesian model for A0 inversion accounting for closure components?
 
+## Coming back sometime later
+
+Suppose I can characterize the closure. How much better job does the approximation do at estimating A0 via lm? Later I can check on Bayesian approaches.
+
+```{r}
+closhats <- c(reachdata, list(uscase = uscase, sscase = sscase)) %>% 
+  map(possibly(swot_purge_nas, otherwise = NULL)) %>% 
+  map(possibly(closure_hat, otherwise = NULL)) %>% 
+  map(function(x) x - mean(x))
+
+closhats$Connecticut %>% plot_DAWG()
+
+ws35s <- c(reachdata, list(uscase = uscase, sscase = sscase)) %>% 
+  `[`(names(closhats)) %>% 
+  map(manning_ws35)
+
+newWs35s <- map2(ws35s, closhats, possibly(function(x, y) x * exp(-3/5 * y), otherwise = NULL))
+dAmats <- c(reachdata, list(uscase = uscase, sscase = sscase)) %>% 
+  `[`(names(newWs35s)) %>% 
+  map(~.$dA)
+xvecs <- c(reachdata, list(uscase = uscase, sscase = sscase)) %>% 
+  `[`(names(newWs35s)) %>% 
+  map(~.$x[, 1])
+```
+
+Now run the whole thing and compare.
+
+```{r}
+nms <- names(xvecs)
+realA0s <- c(reachdata, list(uscase = uscase, sscase = sscase)) %>% 
+  `[`(nms) %>% 
+  map(function(x) (x$A - x$dA)[, 1])
+
+naiveA0s <- c(reachdata, list(uscase = uscase, sscase = sscase)) %>% 
+  `[`(nms) %>% 
+  map(possibly(estA0, otherwise = NULL))
+
+newA0s <- pmap(.l = list(ws35mat = newWs35s[nms],
+                         dAmat = dAmats[nms],
+                         xvec = xvecs[nms]),
+               .f = possibly(estA0_lm_ws35, otherwise = NULL),
+               weight = FALSE) %>% 
+  map(coef)
+
+nlfun <- function(x) which(sapply(x, is.null))
+
+nulls <- union(union(nlfun(realA0s), nlfun(naiveA0s)), 
+               nlfun(newA0s))
+
+valdf <- data.frame(real = unlist(realA0s[-nulls]),
+              naive = unlist(naiveA0s[-nulls]),
+              new = unlist(newA0s[-nulls]))
+
+par(mfrow = c(1, 2))
+plot(real ~ naive, valdf, log = "xy"); abline(0, 1)
+plot(real ~ new, valdf, log ="xy"); abline(0, 1)
+par(mfrow = c(1, 1))
+
+```
+
+
+
+Now check on flow imbalance impact on uscase. 
+
+```{r}
+lags1 <- c(-1,  0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3)
+lags2 <- c(-1, -1, 0, 1, 1, 2, 3, 3, 4, 5, 5, 6, 7)
+
+lagsets <- map2(lags1, lags2, ~c(0, -.x, -.y))
+
+tlcases <- map(lagsets, ~swot_timelag(uscase, .))
+
+Qimbs <- map(tlcases, ~characterize_closure(., method = "anova")) %>% 
+  map_dbl(function(x) x$dQ_pct)
+qimbdf <- data.frame(caseid = as.character(1:length(Qimbs)), 
+                     Qimb = Qimbs)
+
+plot(Qimbs)
+
+bootstrap_A0 <- function(swotlist) {
+  cols <- 1:ncol(swotlist$W)
+  sampcollist <- lapply(1:1000, function(x) sample(cols, replace = TRUE))
+  boot_cases <- map(sampcollist, ~swot_sset(swotlist, keeptimes = .))
+  
+  boot_nunique <- map_int(sampcollist, ~length(unique(.)))
+  boot_A0 <- map(boot_cases, estA0) %>% 
+    map(~as.data.frame(as.list(.))) %>% 
+    bind_rows(.id = "bootsamp")
+  boot_A0
+}
+
+tlboots <- map(tlcases, bootstrap_A0) %>% 
+  bind_rows(.id = "caseid")
+
+plotdf <- left_join(tlboots, qimbdf, by = "caseid")
+
+
+
+
+```
+
+```{r}
+plotdf %>% 
+  glimpse()
+ggplot(plotd f, aes(x = Qimb, y = x1)) + 
+  geom_point(size = 0.5, position = position_jitter(width = 0.5), 
+             alpha = 0.2)
+```
+
