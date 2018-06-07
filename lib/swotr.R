@@ -256,3 +256,39 @@ plot_DAWG <- function (dawgmat) {
     geom_line(aes(color = reach, group = reach)) + 
     scale_color_gradient()
 }
+
+nc_reach <- function (file, good_only = FALSE) {
+  if (!requireNamespace("ncdf4", quietly = TRUE)) {
+    stop("The ncdf4 package is needed for this function to work. Please install it.", 
+         call. = FALSE)
+  }
+  nclist <- nc_list(file)
+  t <- as.Date(nclist$Reach_Timeseries.t - 1, origin = "0000-01-01")
+  good_reaches <- nclist$River_Info.gdrch
+  W <- nclist$Reach_Timeseries.W
+  H <- nclist$Reach_Timeseries.H
+  S <- nclist$Reach_Timeseries.S
+  dA <- calcdA_mat(w = W, h = H)
+  A <- nclist$Reach_Timeseries.A
+  QWBM <- nclist$River_Info.QWBM
+  inbounds <- 1:nrow(W)
+  if (good_only) 
+    inbounds <- good_reaches
+  Q <- nclist$Reach_Timeseries.Q
+  # Qobs <- apply(Q, 2, median)
+  
+  rbnd <- as.vector(nclist$River_Info.rch_bnd)
+  nreach <- length(rbnd) - 1
+  upbnd = rbnd[1:nreach][inbounds]
+  dnbnd = rbnd[2:(nreach + 1)][inbounds]
+  x <- (upbnd + dnbnd) / 2
+  
+  ptrn <- W[inbounds, ]
+  
+  out <- list(W = W[inbounds, ], S = S[inbounds, ], dA = dA[inbounds, ], 
+              H = H[inbounds, ], 
+              t = swot_vec2mat(t, ptrn), x = swot_vec2mat(x, ptrn),
+              reachid = swot_vec2mat(inbounds, ptrn), Q = Q[inbounds, ], 
+              A = A[inbounds, ], QWBM = QWBM)
+  out
+}

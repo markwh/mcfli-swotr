@@ -1,0 +1,102 @@
+---
+title: "notebook20180605"
+author: "Mark Hagemann"
+date: "June 5, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Picking up where a very messy file left off after getting distracted from Pepsi 2 runs with bamr improvements. 
+
+Remaining work to be done:
+
+- troubleshoot divergent transitions, chain convergence DONE.
+- Decide whether hierarchical error term is worth it to include
+    - Not based on HMC diagnostics
+- Put median A0 into other stan models, bam dataprep. DONE.
+- Purge extraneous parameters from returned object. DONE.
+
+THEN I can run Pepsi 2. 
+
+I put a bunch of model runs into src/bam_experiments_pepsi1/
+
+```{r}
+load("../src/bam_experiments_pepsi1/bamruns4.RData")
+
+pryr::object_size(bamruns4)
+```
+
+Since these are so big, best to just load 1 or 2 at a time.
+
+```{r}
+map_dbl(bamruns4$ests, max_rhat)
+```
+
+So it seems the divergence only comes in with hierarchical error. 
+
+```{r}
+load("../src/bam_experiments_pepsi1/bamruns5.RData")
+map_dbl(bamruns5$ests, max_rhat)
+```
+
+```{r}
+check1 <- check_rhat(bamruns5$ests$Connecticut)
+
+ests5.2 <- bam_estimate(bamruns5$data$Connecticut, variant = "manning", 
+                        bampriors = bamruns5$priors$Connecticut, 
+                        cores = 3, chains = 3, iter = 3000, stanmodel = bamruns5$model)
+check_rhat(ests5.2)
+
+stan_trace(ests5.2, pars = "A0_min")
+stan_trace(ests5.2, pars = "truesigma_man")
+
+check_rhat(ests5.2) %>% 
+  arrange(desc(stat)) %>% 
+  head(20)
+```
+
+```{r}
+check1 <- check_rhat(bamruns5$ests$GaronneUpstream)
+
+ests5.2 <- bam_estimate(bamruns5$data$GaronneUpstream, variant = "manning", 
+                        bampriors = bamruns5$priors$GaronneUpstream, 
+                        cores = 3, chains = 3, iter = 3000, stanmodel = bamruns5$model)
+check_rhat(ests5.2)
+
+stan_trace(ests5.2, pars = "A0_min")
+stan_trace(ests5.2, pars = "truesigma_man")
+stan_trace(ests5.2, pars = "sigma_logQ")
+stan_trace(bamruns5$ests$GaronneUpstream, pars = "sigma_logQ")
+stan_trace(bamruns5$ests$GaronneUpstream, pars = "A0_min")
+
+
+stan_trace(ests5.2, pars = "lp__")
+
+check_rhat(ests5.2) %>% 
+  arrange(desc(stat)) %>% 
+  head(20)
+```
+
+
+
+Some further diagnostics.
+
+```{r}
+for (i in 1:length(bamruns4$ests)) {
+  print(names(bamruns4$ests)[i])
+  fiti <- bamruns4$ests[[i]]
+  check_hmc_diagnostics(fiti)
+  cat("\n")
+}
+
+for (i in 1:length(bamruns5$ests)) {
+  print(names(bamruns5$ests)[i])
+  fiti <- bamruns5$ests[[i]]
+  check_hmc_diagnostics(fiti)
+  cat("\n")
+}
+```
+

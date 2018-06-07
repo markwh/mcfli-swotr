@@ -202,3 +202,9 @@ estA0_moddf <- function(ws35mat, dAmat, xvec = NULL, weight = !is.null(xvec),
   
   moddf
 }
+
+
+realA0 <- function(swotlist) {
+  out <- with(swotlist, A - dA)[, 1]
+  out
+}

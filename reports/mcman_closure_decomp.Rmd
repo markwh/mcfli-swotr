@@ -9,14 +9,23 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-In a previous document I decomposed the variability of flow resistance (Manning's n) in time and space using Pepsi 1 cases. In this docoument I will explore that idea further, expanding it to include components of flow imbalance. These two quantities--flow imbalance and Manning n variability--constitute the closure term for Mass-conserved Manning's equation as used to infer $A_0$. 
+Last week I illustrated how the closure term for Mass-conserved Manning's equation can vary in time and space. I defined this essentially as a variable Manning's n--that is, the term $n_{it}$ required to satisfy the equality 
+
+$$
+Q_{t} = \frac{1}{n_{it}}A^{5/3}W^{-2/3}S^{1/2}
+$$
+
+In this post I'll break this term down and analyze its variability in time and space. 
+
+
+
 
 ## Model
 
-Mass-conserved Manning (McMan) assumes the following relationship holds:
+Steady-state mass-conserved Manning's eqauation assumes the following relationship holds:
 
 $$
-A_{it} X_{it} = A_{it} (W_{it}^{-2/3} S_{it}^{1/2})^{3/5} =  nQ_t
+A^{5/3}W^{-2/3}S^{1/2} =  nQ_t
 $$
 
 Departures from this relationship can arise from the following conditions:
@@ -24,45 +33,72 @@ Departures from this relationship can arise from the following conditions:
 - Flow resistance, $n$, varies in time and/or space. Spatial variability can come from change in bed material between reaches; time variability can come from interdependence between stream depth and flow resistance. 
 - Spatial variability in $Q_t$ arising from non-steady-state flow conditions.
 - Lateral influx/outflux of water resulting in non-mass-conserved conditions.
-- Invalidity of Manning's equation assumptions. 
+- Inadequacy of Manning's equation assumptions. 
 
-Note that these do not account for other sources of error such as measurement or parameter uncertainty. 
+Note that this list does not include measurement error, which is separate from the current discussion.
 
-In order to account for these departures, instead write the true equality as
+Encapsulating all the closure-term variability in $n_{it}$ is somewhat misleading, since the failure of equation 2 includes variability in both flow resistance as well as spatial variability in flow. In order to account for these issues, I've found it useful to write the instead write the true equality as
 
 $$
-A_{it} X_{it} =  n_{it}Q_{it} = (\nu_{it} \gamma_{it})\bar{n}\bar{Q}_t 
+n_{it}Q_{it} = \exp(\nu_{it} + \gamma_{it})\bar{n}\bar{Q}_t 
 $$
 
-where $\gamma_{it} = Q_{it} / \bar{Q}$ represents flow variability and $\nu_{it} = n_{it} / \bar{n}$ represents all other sources of multiplicative error. $\bar{n}$ and $\bar{Q}_t$ can be computed variously from $n_{it}$ and $Q_{it}$, but the most natural choice is the geometric mean, ensuring that $\nu$ and $\gamma$ both have geometric mean of 1. 
+or in log-space as
 
-Since $\gamma_{it}$ is comprised prinicpally from flow imbalance due to non-steady-state conditions, the time series it contains will be highly correlated in space. Furthermore, the reach containing the mean location along the river section will have $\gamma_t$ close to zero, and the magnitude of $\gamma_t$ will increase further upstream and downstream from this middle reach. Reaches downstream of the middle reach will have $\gamma$ time series that are positively correlated with one another and negatively correlated those upstream of the middle reach. The time-series structure of $\gamma$ is likely to be negligible at SWOT overpass time scales, but significant at approximately daily time scales. An example of this structure can be seen in the following subset of the Po River data. 
+$$
+\log n_{it} + \log Q_{it} = \nu_{it} + \gamma_{it} + \log \bar{n}\bar{Q}_t 
+$$
+
+where $\gamma_{it} = \log (Q_{it} / \bar{Q})$ represents flow variability and $\nu_{it} = n_{it} / \bar{n}$ represents flow resistance variability and all other sources of multiplicative error. $\bar{n}$ and $\bar{Q}_t$ can be computed variously from $n_{it}$ and $Q_{it}$, but the most natural choice is the geometric mean, ensuring that $\nu$ and $\gamma$ both have geometric mean of 1. 
+
+Since $\gamma_{it}$ is comprised prinicpally from flow imbalance due to non-steady-state conditions, the time series it contains will be highly correlated in space. Furthermore, the reach containing the mean location along the river section will have $\gamma_t$ close to zero, and the magnitude of $\gamma_t$ will increase further upstream and downstream from this middle reach. Reaches downstream of the middle reach will have $\gamma$ time series that are positively correlated with one another and negatively correlated those upstream of the middle reach. The autocorrelation structure of $\gamma$ is likely to be negligible at SWOT overpass time scales, but significant at approximately daily time scales. An example of this structure can be seen in the following subset of the Po River data. 
 
 ```{r}
 reachdata$Po %>% 
   # swot_sset(keeptimes = 100:120) %>% 
-  swot_gamma() %>% 
+  manning_gamma(log = TRUE) %>% 
   plot_DAWG() +
-  scale_y_log10() +
-  xlim(100, 120) +
-  # ylim(0.8, 1.2) +
-  ylab("gamma") +
   theme_bw()
 ```
 
-Since $\gamma$ is a multiplicative term, it can be modeled in log space as
+Here's a zoomed-in version showing spatial correlation:
 
-$$
-\ln \gamma_{it} = \tau_i \ln [\bar{\gamma_{\cdot t}}] + \epsilon_{it}
-$$
+```{r}
+reachdata$Po %>% 
+  # swot_sset(keeptimes = 100:120) %>% 
+  manning_gamma(log = TRUE) %>% 
+  plot_DAWG() +
+  theme_bw() +
+  xlim(100, 120) +
+  ylim(-0.15, 0.15)
+```
+
+The other term, $\nu$, 
+
+```{r}
+reachdata$Po %>%
+  manning_nu(log = TRUE) %>% 
+  plot_DAWG() +
+  theme_bw()
+```
+
+```{r}
+reachdata$Po %>%
+  manning_nu(log = TRUE) %>% 
+  plot_DAWG() +
+  theme_bw() +
+  xlim(100, 120)
+```
+
+
+
 
 
 ```{r}
 casei <- reachdata$Po
 
 gami <- casei %>% 
-  swot_gamma() %>% 
-  log()
+  manning_gamma(log = TRUE)
 
 plot_DAWG(gami)
 

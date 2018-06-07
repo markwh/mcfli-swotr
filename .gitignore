@@ -11,3 +11,4 @@ lisflood/*
 *.log
 *.tex
 data
+*.RData

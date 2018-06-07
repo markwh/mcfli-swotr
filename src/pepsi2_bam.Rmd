@@ -1,0 +1,892 @@
+---
+title: "Pepsi 2 Analysis"
+author: "Mark Hagemann"
+date: "May 30, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Load the data
+
+```{r}
+library(ncdf4)
+
+ncfiles <- list.files("../data/Pepsi2/Pepsi2/", pattern = "\\.nc$", full.names = TRUE)
+ncnames <- list.files("../data/Pepsi2/Pepsi2/", pattern = "\\.nc$", full.names = FALSE) %>% 
+  gsub("\\.nc$", "", .)
+
+matrify <- function(nclist) {
+  W <- nclist$w
+  S <- nclist$s
+  H <- nclist$h
+  dA <- nclist$dA
+  A <- nclist$
+  
+  
+  time <- nclist$t
+}
+
+pep2nc <- map(ncfiles, ~nc_reach(file = ., good_only = TRUE)) %>% 
+  setNames(ncnames)
+  
+
+
+```
+
+## Remove problematic times (currently just very low and negative slopes)
+
+```{r}
+pep2_sset <- map(pep2nc, swot_tidy) %>% 
+  bind_rows(.id = "case") %>% 
+  dplyr::mutate(S = ifelse(S < 1e-8, NA, S),
+                Q = ifelse(Q < 1, NA, Q)) %>% 
+  split(.$case) %>% 
+  map(swot_untidy) %>% 
+  map(swot_purge_nas, "times") %>% 
+  map(function(lst) {lst$dA <- rezero_dA(lst$dA, zero = "minimum"); lst})
+
+
+```
+
+
+
+## Subset to only observed variables
+
+```{r}
+
+obsOnly <- function(swotlist) {
+  out <- list(H = swotlist$H,
+              S = swotlist$S,
+              W = swotlist$W,
+              dA = swotlist$dA)
+  out
+}
+
+
+pep2obs <- map(pep2_sset, obsOnly)
+pep2QWBM <- map(pep2nc, ~as.vector(.$QWBM))
+```
+
+
+## Plot datasets
+
+```{r}
+
+for (i in 1:length(pep2obs)) {
+  ggi <- swot_plot(pep2obs[[i]]) + scale_y_log10()
+  namei <- names(pep2obs)[i]
+  ggsave(ggi, filename = sprintf("../graphs/pepsi2_eda/%s.png", namei))
+}
+
+
+```
+
+Remove slopes < 1e-8, and we should be good!
+
+## Make bamr-ready data
+
+```{r}
+library(bamr)
+
+pep2bd <- map2(pep2obs, pep2QWBM, ~bam_data(w = .x$W, s = .x$S, dA = .x$dA, Qhat = .y))
+pep2priors <- map(pep2bd, ~bam_priors(bamdata = ., logn_sd = 0.25, logA0_sd = 1))
+
+```
+
+## Test a single run
+
+```{r}
+library(rstan)
+(casei <- ncnames[1])
+
+fixmod <- stan_model("../../bamr/exec/manning_nolatent.stan")
+
+dati <- pep2bd[[casei]]
+dati$logQ_hat <- mean(dati$logQ_hat)
+
+prisi <- pep2priors[[casei]]
+# prisi$logn_sd <- 0.05
+prisi$lowerbound_logn <- -10
+prisi$logQ_sd <- mean(prisi$logQ_sd)
+prisi$sigma_man <- mean(prisi$sigma_man)
+
+esti <- bam_estimate(bamdata = dati, variant = "manning", 
+             bampriors = prisi, meas_error = FALSE, 
+             stanmodel = fixmod,
+             cores = 3, iter = 2000, chains = 3)
+
+foo <- rstan::summary(esti)$summary
+plot(foo[, "Rhat"])
+stan_trace(esti, pars = "A0", inc_warmup = FALSE) + theme_bw()
+stan_trace(esti, pars = "logn", inc_warmup = TRUE) + theme_bw()
+
+source("../lib/pripost.R")
+pripost_A0(pep2priors[[casei]], esti, true_A0 = realA0(pep2_sset[[casei]])) +
+  scale_x_log10()
+pripost_n(pep2priors[[casei]], esti)
+pripost_alpha(pep2priors[[casei]], bamdata = pep2bd[[casei]], esti)
+
+bam_hydrograph(esti, qobs = pep2_sset[[casei]]$Q %>% apply(2, median))
+```
+
+```{r}
+stan_trace(esti, pars = "logQbar") + theme_bw()
+stan_trace(esti, pars = "sigma_logQ") + theme_bw()
+stan_trace(esti, pars = "truesigma_man") + theme_bw()
+stan_dens(esti, pars = c("logn", "logQbar", "logQnbar")) + theme_bw()
+foofun <- partial(dnorm, mean = pep2bd[[casei]]$logQ_hat[1], sd = 0.833)
+plot(foofun, xlim = c(4, 12))
+
+pep2priors$ArialKhan$logn_hat
+pep2priors$ArialKhan$logn_sd
+
+```
+
+
+
+How about an expansion of pripost-type functions to show with truth for a given swotlist?
+
+```{r}
+swotlist <- pep2_sset$ArialKhan
+bampriors <- prisi
+stanfit <- esti
+bamdata <- dati
+
+pripost_suite <- function(stanfit, bamdata, bampriors, swotlist, conf.level = 0.95) { 
+  swotlist$dA <- rezero_dA(swotlist$dA, "minimum")
+  real_A0 <- realA0(swotlist)
+  real_logn <- mean(manning_closure(swotlist, log = TRUE, mc = TRUE), na.rm = TRUE)
+  real_n <- exp(real_logn)
+  real_Q <- swotlist$Q
+  realQvec <- apply(real_Q, 2, geomMean)
+  pp_A0 <- pripost_A0(bampriors = bampriors, stanfit = stanfit, true_A0 = real_A0)
+  pp_alpha <- pripost_alpha(bampriors = bampriors, bamdata = bamdata, stanfit = stanfit, 
+                true_n = real_n, true_Q = real_Q)
+  pp_n <- pripost_n(bampriors = bampriors, stanfit = stanfit, true_n = real_n)
+  pp_q <- pripost_q(bampriors = bampriors, stanfit = stanfit, true_Q = realQvec)
+  pp_qbar <- pripost_qbar(bampriors = bampriors, bamdata = bamdata, 
+                          stanfit = stanfit, true_Q = realQvec)
+  pp_qdot <- pripost_qdot(bampriors = bampriors, stanfit = stanfit, true_Q = realQvec)
+  
+  out <- list(Q = pp_q, Qbar = pp_qbar, Qdot = pp_qdot, 
+              logQn = pp_alpha, n = pp_n, A0 = pp_A0)
+  out
+}
+
+ppsi <- pripost_suite(esti, dati, prisi, pep2_sset[[casei]])
+ppsi$A0 + xlim(0, 3500)
+
+```
+
+Now a suite of stats. Nevermind, bam_validate does that already. 
+
+Compare new and old manning_nolatent algos on Pepsi1 cases. 
+
+```{r}
+# Copying some stuff from SWOT project
+load("../../SWOT/cache/nc_r.RData")
+
+# Generate bamdata objects for using bamr
+bamdata_r <- lapply(nc_r, # reach data
+                    function(x) bam_data(w = x$w, s = x$s, dA = x$dA, Qhat = x$QWBM[1]))
+
+prifun <- function(x, scalar = FALSE) {
+  if (scalar) {
+    x$logQ_sd <- mean(x$logQ_sd)
+  }
+  x$logA0_sd <- 1
+  x$logn_sd <- 0.25
+  x
+}
+
+bampriors_old <- lapply(bamdata_r, bam_priors) %>% 
+  map(prifun, scalar = FALSE)
+bampriors_new <- lapply(bamdata_r, bam_priors) %>% 
+  map(prifun, scalar = TRUE)
+
+# Function to subset observed flow 
+ssetq <- function(ncdata, bamdata) {
+  qvec <- ncdata$Qobs
+  if (length(bamdata$omitTimes) == 0)
+    return(qvec)
+  qvec[-bamdata$omitTimes]
+}
+
+qobs_r <- mapply(ssetq, ncdata = nc_r, bamdata = bamdata_r)
+```
+
+
+Estimate using old version. Test on a couple individual cases.
+
+```{r}
+case1 <- "Po"
+est1 <- bam_estimate(bamdata = bamdata_r[[case1]], variant = "manning", 
+                     bampriors = bampriors_old[[case1]], meas_error = FALSE, 
+                     # reparam = FALSE, 
+                     cores = 3, chains = 3)
+suite1 <- pripost_suite(est1, bamdata_r[[case1]], bampriors_r[[case1]], reachdata[[case1]])
+suite1$Q
+suite1$A0 + xlim(0, 2000)
+suite1$n
+
+# default priors version
+est2 <- bam_estimate(bamdata = bamdata_r[[case1]], variant = "manning", 
+                     meas_error = FALSE, 
+                     # reparam = FALSE, 
+                     cores = 3, chains = 3)
+
+
+suite2 <- pripost_suite(est2, bamdata_r[[case1]], 
+                        bam_priors(bamdata_r[[case1]], variant = "manning"), 
+                        reachdata[[case1]])
+suite2$Q 
+suite2$A0 + xlim(0, 2000)
+suite2$n
+```
+
+
+
+
+```{r}
+fixmod <- stan_model("../../bamr/exec/manning_nolatent.stan")
+time1 <- Sys.time()
+old_ests <- map2(bamdata_r, bampriors_old, 
+                 possibly(~bam_estimate(bamdata = .x, variant = "manning", 
+                                        bampriors = .y, meas_error = FALSE, 
+                                        reparam = FALSE, cores = 3, chains = 3),
+                          otherwise = NA))
+time2 <- Sys.time()
+```
+
+
+```{r}
+bamdata_new <- map(bamdata_r, function(x) {x$logQ_hat = mean(x$logQ_hat); x})
+time3 <- Sys.time()
+new_ests <- map2(bamdata_new, bampriors_new, 
+                 possibly(~bam_estimate(bamdata = .x, variant = "manning", 
+                                        bampriors = .y, 
+                                        stanmodel =  fixmod, 
+                                        meas_error = FALSE, reparam = FALSE, 
+                                        cores = 3, chains = 3),
+                          otherwise = NA))
+time4 <- Sys.time()
+```
+
+```{r}
+library(batchtools)
+
+origdir <- "../../SWOT/src/bam_experiments/runs3/reg_reach_manning"
+origreg <- loadRegistry(origdir, writeable = TRUE, make.default = FALSE)
+
+source("../../SWOT/src/bam_experiments/runs3/loadReaches.R", chdir = TRUE)
+
+origbamdata <- bamdata_r
+origbampriors <- map(origbamdata, bam_priors)
+origres <- map(1:nrow(origreg$status), loadResult, reg = origreg) %>% 
+  setNames(names(nc_r))
+
+origpripost <- pripost_suite(stanfit = origres[[case1]], bamdata = origbamdata[[case1]], 
+                             bampriors = origbampriors[[case1]], swotlist = reachdata[[case1]])
+
+newpripost <- pripost_suite(stanfit = new_ests[[case1]], bamdata = bamdata_new[[case1]], 
+                             bampriors = bampriors_new[[case1]], swotlist = reachdata[[case1]])
+newpripost$A0 <- newpripost$A0 + xlim(250, 1200)
+
+stan_rhat(new_ests[[case1]])$data$stat %>% plot()
+
+origpripost
+newpripost
+
+```
+
+I need to slow down. Pick 1 or 2 cases and compare the following in detail:
+
+- convergence, number of iterations
+    - Hold this constant at 2000. 
+- A0 and n priors
+    - original tight A0, loose n
+    - new loose A0, tight n
+- hyperprior on sigma_man
+    - Create a new model with issues fixed, but no prior on sigma_man?
+- A0 Jacobian 
+    - old version without
+    - new version with
+- vector-specified logQ priors
+    - old version without
+    - new version with
+
+Enumerate data objects, priors objects, model function objects.
+
+```{r}
+fixmod <- stan_model("../../bamr/exec/manning_nolatent.stan")
+testcase <- "Po"
+
+testdata <- bamdata_r[[testcase]]
+
+testpriors_old <- testpriors_new <-  bam_priors(testdata)
+testpriors_new$logA0_sd <- 1
+testpriors_new$logn_sd <- 0.25
+
+modfun_old <- function(data, priors) {
+  out <-  bam_estimate(bamdata = data, bampriors = priors,reparam = FALSE, 
+                       variant = "manning", meas_error = FALSE, cores = 3, 
+                       iter = 2000, chains = 3)
+  out
+}
+
+modfun_new <- function(data, priors) {
+  data$logQ_hat <- mean(data$logQ_hat)
+  priors$logQ_sd <- mean(priors$logQ_sd)
+  out <-  bam_estimate(bamdata = data, bampriors = priors,reparam = FALSE, 
+                       stanmodel = fixmod,
+                       variant = "manning", meas_error = FALSE, cores = 3, 
+                       iter = 2000, chains = 3)
+  out
+}
+
+
+est_old <- modfun_old(data = testdata, priors = testpriors_old)
+est_old_newpriors <- modfun_old(data = testdata, priors = testpriors_new)
+est_new <- modfun_new(testdata, testpriors_new)
+est_new_oldpriors <- modfun_new(testdata, testpriors_old)
+```
+
+Check convergence
+
+```{r}
+plot(stan_rhat(est_old)$data$stat)
+foo <- stan_rhat(est_old)$data
+which.max(foo$stat)
+rownames(foo)[368]
+
+stan_trace(est_old, "logn", inc_warmup = TRUE) + theme_bw()
+```
+
+Check pripost.
+
+```{r}
+ppold1 <- pripost_suite(est_old, testdata, testpriors_old, reachdata[[testcase]])
+ppold2 <- pripost_suite(est_old_newpriors, testdata, testpriors_new, reachdata[[testcase]])
+ppnew1 <- pripost_suite(est_new_oldpriors, testdata, testpriors_old, reachdata[[testcase]])
+ppnew2 <- pripost_suite(est_new, testdata, testpriors_new, reachdata[[testcase]])
+```
+
+```{r}
+ppold1
+ppold2
+ppnew1
+ppnew2
+```
+
+Just A0 now, log space
+
+```{r}
+ppold1$A0 + scale_x_log10()
+ppold2$A0 + scale_x_log10()
+ppnew1$A0 + scale_x_log10()
+ppnew2$A0 + scale_x_log10()
+
+ppold1$A0 + xlim(100, 1300)
+ppold2$A0 + xlim(100, 1300)
+ppnew1$A0 + xlim(100, 1300)
+ppnew2$A0 + xlim(100, 1300)
+
+```
+
+Validate.
+
+```{r}
+testq <- qobs_r[[testcase]]
+testval1 <- bam_validate(est_old, testq)
+testval2 <- bam_validate(est_old_newpriors, testq)
+testval3 <- bam_validate(est_new_oldpriors, testq)
+testval4 <- bam_validate(est_new, testq)
+```
+
+```{r}
+list(old1 = testval1, old2 = testval2, new1 = testval3, new2 = testval4) %>% 
+  map(~as.data.frame(as.list(.$stats))) %>% 
+  bind_rows(.id = "model")
+```
+
+
+
+
+What's the distribution look like with and without the Jacobian?
+
+```{r}
+dfun_nojac <- function(mu, sigma) {
+  out <- function(x) {
+    res1 <- dnorm(log(x), mu, sigma)
+    res <- res1 / max(res1)
+    res
+  }
+  out
+}
+
+dfun_jac <- function(mu, sigma) {
+  out <- function(x) {
+    res1 <- dlnorm(x, mu, sigma)
+    res <- res1 / max(res1)
+    res
+  }
+  out
+}
+
+plot(dfun_nojac(log(800), 0.5), xlim = c(0, 3000))
+foofun <- dfun_jac(log(800), 0.6)
+curve(foofun, 0, 3000, add = TRUE)
+
+```
+
+
+Might as well run all of Pepsi 1. 
+
+```{r}
+bamdata_new <- map(bamdata_r, function(x) {x$logQ_hat = mean(x$logQ_hat); x})
+new_ests <- map2(bamdata_new, bampriors_new, 
+                 possibly(~bam_estimate(bamdata = .x, variant = "manning", 
+                                        bampriors = .y, 
+                                        stanmodel =  fixmod, 
+                                        meas_error = FALSE, reparam = FALSE, 
+                                        cores = 3, chains = 3),
+                          otherwise = NA))
+```
+
+
+```{r}
+newvals <- new_ests %>% 
+  map2(qobs_r, ~bam_validate(.x, .y)$stats) %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  bind_rows(.id = "case")
+
+origvals <- origres %>% 
+  map2(qobs_r, ~bam_validate(.x, .y)$stats) %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  bind_rows(.id = "case")
+
+
+plot(newvals$RRMSE, origvals$RRMSE, log = "xy"); abline(0, 1)
+
+newvals %>% 
+  arrange(desc(RRMSE))
+
+
+bam_hydrograph(new_ests$Connecticut, qobs = qobs_r$Connecticut)
+pripost_suite(new_ests$Connecticut, bamdata_new$Connecticut, bampriors_new$Connecticut, 
+              reachdata$Connecticut)
+```
+
+I need to characterize the parameters for validated McMan. 
+
+- Error autocorrelation
+- Manning error (sigma_man)
+- sigma_dgdx
+- n
+- logQ_sd
+- logQ_mean
+- A0
+
+Spin up a bunch of new models
+
+- no hyperprior on sigma_man
+- A0 as median
+- flow imbalance via sd_gamma
+- n vairability via alpha
+- 
+
+Simplify data inputs using somthing like swotlist. 
+
+
+```{r}
+new_ests %>% 
+  map(~get_posterior_mean(., pars = "truesigma_man")) %>% 
+  map(~data.frame(mean = .[1, 3])) %>% 
+  bind_rows(.id = "case")
+```
+
+
+```{r}
+fixmod_fixsigman <- stan_model("../../bamr/exec/manning_nolatent_2.stan")
+new_ests_fixsigman <- map2(bamdata_new, bampriors_new, 
+                 possibly(~bam_estimate(bamdata = .x, variant = "manning", 
+                                        bampriors = .y, 
+                                        stanmodel =  fixmod_fixsigman, 
+                                        meas_error = FALSE, reparam = FALSE, 
+                                        cores = 3, chains = 3),
+                          otherwise = NA))
+```
+
+
+```{r}
+newvals_2 <- new_ests_fixsigman %>% 
+  map2(qobs_r, ~bam_validate(.x, .y)$stats) %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  bind_rows(.id = "case")
+
+plot(newvals_2$RRMSE, origvals$RRMSE, xlim = c(0, 1), ylim = c(0, 1)); abline(0, 1)
+plot(newvals_2$RRMSE, newvals$RRMSE, xlim = c(0, 1), ylim = c(0, 1)); abline(0, 1)
+```
+
+Try with a more sensible upper bound on A0.
+
+```{r}
+
+A0max <- function(swotlist) {
+  mins <- apply(swotlist$W, 1, min)
+  maxmin <- max(mins)
+  maxmin * 10
+}
+
+A0maxes <- map(reachdata, A0max)
+
+bampriors3 <- map2(bampriors_new, A0maxes, function(x, y) {x$upperbound_A0 = y; x})
+new_ests3 <- map2(bamdata_new, bampriors3, 
+                 possibly(~bam_estimate(bamdata = .x, variant = "manning", 
+                                        bampriors = .y, 
+                                        stanmodel =  fixmod_fixsigman, 
+                                        meas_error = FALSE, reparam = FALSE, 
+                                        cores = 3, chains = 3),
+                          otherwise = NA))
+```
+
+How'd it do?
+
+```{r}
+newvals_3 <- new_ests3 %>% 
+  map2(qobs_r, ~bam_validate(.x, .y)$stats) %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  bind_rows(.id = "case")
+
+plot(newvals_3$RRMSE, origvals$RRMSE, xlim = c(0, 1), ylim = c(0, 1)); abline(0, 1)
+plot(newvals_3$RRMSE, newvals$RRMSE, xlim = c(0, 1), ylim = c(0, 1)); abline(0, 1)
+plot(newvals_3$RRMSE, newvals_2$RRMSE, xlim = c(0, 1), ylim = c(0, 1)); abline(0, 1)
+```
+
+
+
+Looking now at how closure_lm gets its coefficients, and why these are more variable than a manual characterization. 
+
+```{r}
+full_lm <- closure_lm(swotlist)
+formula(full_lm)
+gamma_lm <- lm(clos ~ time:xdev, data = full_lm$model)
+sd(coefficients(gamma_lm))
+nu_lm <- lm(clos ~ loc, data = full_lm$model)
+
+nu_lm$coefficients
+mean(nu_lm$coefficients[-1])
+
+manual_nubars <- apply(manning_closure(swotlist, log = TRUE), 1, mean)
+
+lm_nubars <- nu_lm$coefficients[-1]
+lm_nubars <- c(lm_nubars, -sum(lm_nubars))
+
+plot(manual_nubars, lm_nubars)
+
+
+resid1 <- residuals(gamma_lm)
+resid1mat <- matrix(resid1, nrow = 10)
+
+plot_DAWG(resid1mat)
+
+sd(apply(resid1mat, 1, mean))
+
+nubars2 <- apply(resid1mat, 1, mean)
+
+plot(nubars2[-10], nu_lm$coefficients[-1]); abline(0, 1)
+plot(nubars2[-10], full_lm$coefficients[2:10]); abline(0, 1)
+
+sd(nubars2)
+sd(nu_lm$coefficients[-1])
+
+sd(full_lm$coefficients[2:10])
+
+```
+
+I'm inclined to say this is good enough. 
+
+
+Where isn't my characterize_closure_anova working?
+
+- uses manning_closure, which requires full A matrix. 
+
+```{r}
+for (i in 1:length(reachdata)) {
+  foo <- characterize_closure(reachdata[[i]], method = "anova")
+}
+
+names(reachdata)[i]
+
+
+characterize_closure_anova(reachdata$Tanana)
+
+reachdata$StLawrenceDownstream$x
+
+```
+
+Now using only full reachdata cases.
+
+```{r}
+badinds <- grep("(StLaw|Tanan)", names(reachdata))
+reachdata_full <- reachdata[-badinds]
+```
+
+Now I can investigate via peeking.
+
+```{r}
+
+reach_peeks <- reachdata_full %>% 
+  map(function(x) {x$x <- x$x / 10000; x}) %>% 
+  map(mcman_peek, method = "anova") %>% 
+  bind_rows(.id = "case")
+
+A0ests <- map(reachdata_full, estA0)
+A0reals <- map(reachdata_full, realA0)
+
+A0relerr <- map2(A0ests, A0reals, function(x, y) (y - x) / x) %>% 
+  map_dbl(median)
+
+reach_peeks %>% 
+  mutate(relerr = sqrt(A0relerr^2)) %>% 
+  glimpse() %>% 
+  select(mu_q:relerr) %>% 
+  pairs()
+
+reach_peeks %>% 
+  mutate(relerr = A0relerr^2) %>% 
+  select(sigma_q:relerr) %>% 
+  lm(relerr ~ ., .) %>% 
+  summary()
+
+reach_peeks %>% 
+  mutate(relerr = sqrt(A0relerr^2)) %>% 
+  plot(relerr ~ sigma_gprime, ., log= "xy")
+```
+
+
+How well does this match up against stan-estimated sigma_man?
+
+- I either need to characterize the closure differently or explicitly estimate these parameters in stanfile. 
+- Characterizing closure is easier. 
+
+```{r}
+realsigman <- reachdata %>% 
+  map_dbl(mcman_sigma, na.rm = TRUE)
+
+estsigman <- new_ests %>% 
+  map_dbl(~get_posterior_mean(., pars = "truesigma_man")[, 4])
+
+plot(estsigman * 0.25, realsigman); abline(0, 1)
+
+realsigman_full <- reach_peeks$sigma_man
+
+plot(estsigman[names(reachdata_full)] * 0.25, realsigman_full, xlim = c(0, 0.5)); abline(0, 1)
+
+```
+
+
+
+See if I can get the timeseries structure of errors.
+
+
+```{r}
+cc1 <- closure_lm(reachdata$Ganges)
+nr <- length(unique(cc1$model$loc))
+residmat <- matrix(residuals(cc1), nrow = nr, byrow = FALSE)
+closmat <- matrix(cc1$model$clos, nrow = nr, byrow = FALSE)
+
+plot_DAWG(residmat)
+
+acf(residmat[1, ])
+pacf(residmat[1, ])
+
+plot(residmat[1, ], type = "l")
+plot(residmat[2, ], type = "l")
+
+ccf(residmat[1, ], residmat[2, ])
+
+plot_DAWG(closmat)
+
+acf(closmat[1, ])
+pacf(closmat[1, ])
+
+plot(closmat[1, ], type = "l")
+plot(closmat[2, ], type = "l")
+
+ccf(closmat[1, ], closmat[2, ])
+
+```
+
+```{r}
+errho <- function(swotlist) {
+  
+  swotlist <- swot_purge_nas(swotlist)
+  ar1 <- function(ts) {
+    pacf(na.omit(ts), plot = FALSE)$acf[1]
+  }
+  clos <- manning_closure(swotlist, log = TRUE)
+  rho_clos <- apply(clos, 1, ar1)
+  
+  nr <- nrow(swotlist$W)
+  residmat <- matrix(residuals(closure_lm(swotlist)), nrow = nr, byrow = FALSE)
+  rho_resid <- apply(residmat, 1, ar1)
+  
+  out <- data.frame(rho_clos = rho_clos, rho_resid = rho_resid)
+  out
+}
+
+errho(reachdata$GaronneUpstream)
+
+errho(reachdata$Kanawha)
+
+map(reachdata_full, possibly(errho, otherwise = data.frame())) %>% 
+  bind_rows(.id = "case") %>% 
+  group_by(case) %>% 
+  summarize(clos = median(rho_clos), resid = median(rho_resid))
+```
+
+Come back to this later. Time to start putting in error structure into stan file. 
+
+- Bah, I still need to do median adjustment. 
+- Done, now test out using code above. Actually, move that below since I never finished above. 
+
+
+### A version with median A0. 
+
+```{r}
+estimate_logA0_median <- function(Wobs) {
+    lwbar <- apply(log(Wobs), 1, mean)
+    lwsd <- apply(log(Wobs), 1, sd)
+    logA0hat <- -1.4058 + 1.4931 * lwbar - 0.2293 * lwsd
+    logA0hat
+}
+
+# new stan model
+
+fixmod_med <- stan_model("../../bamr/exec/manning_nolatent_medianA0.stan")
+
+# bamdata with median-adjusted dA
+medshift <- map(bamdata_r, function(x) apply(x$dA, 1, function(y) median(y) - min(y)))
+bamdata_med <- map(bamdata_r, function(x) {x$logQ_hat = mean(x$logQ_hat); x}) %>% 
+  map(function(x) {x$dAobs <- rezero_dA(x$dAobs, "me"); x}) %>% 
+  map2(medshift, function(x, y) {x$dA_shift <- y; x})
+
+# conservative lower bounds
+
+boundfun_med <- function(dAmat) {
+  bnd1 <- apply(dAmat, 1, function(x) median(x) - min(x) + 30)
+  bnd <- max(bnd1)
+  bnd
+}
+
+A0lwr_med <- map(bamdata_med, function(x) boundfun_med(x$dAobs))
+
+# bampriors with new logA0_hat, logA0_sd = 0.50
+prifun_med <- function(x, datalist, scalar = FALSE) {
+  A0est <- estimate_logA0_median(datalist$W)
+  if (scalar) {
+    x$logQ_sd <- mean(x$logQ_sd)
+  }
+  x$logA0_sd <- 0.5
+  x$logn_sd <- 0.25
+  x$logA0_hat <- A0est
+  x
+}
+bampriors_med <- lapply(bamdata_r, bam_priors) %>% 
+  map2(bamdata_r, prifun_med, scalar = TRUE) # %>% 
+  # map2(A0lwr_med, function(x, y) {x$lowerbound_A0 <- y; x})
+
+
+# Estimate! 
+ 
+newests_medA0 <- map2(bamdata_med, bampriors_med, 
+                 possibly(~bam_estimate(bamdata = .x, variant = "manning", 
+                                        bampriors = .y, 
+                                        stanmodel =  fixmod_med, 
+                                        meas_error = FALSE, reparam = FALSE, 
+                                        cores = 3, chains = 3),
+                          otherwise = NA))
+```
+
+How'd it do?
+
+```{r}
+
+newvals_med <- newests_medA0 %>% 
+  map2(qobs_r, ~bam_validate(.x, .y)$stats) %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  bind_rows(.id = "case")
+
+plot(newvals_med$RRMSE, origvals$RRMSE, xlim = c(0, 1), ylim = c(0, 1)); abline(0, 1)
+plot(newvals_med$RRMSE, origvals$RRMSE); abline(0, 1)
+plot(newvals_med$RRMSE, newvals$RRMSE, xlim = c(0, 1), ylim = c(0, 1)); abline(0, 1)
+plot(newvals_med$RRMSE, newvals_2$RRMSE, xlim = c(0, 1), ylim = c(0, 1)); abline(0, 1)
+plot(newvals_med$RRMSE, newvals_3$RRMSE, xlim = c(0, 1), ylim = c(0, 1)); abline(0, 1)
+
+```
+
+Priors not giving much info here. Fault may be with autocorrelation. See if I can get any boost from gamma, nu terms. 
+
+
+Rinse and repeat for version with latent sigma_man
+
+```{r}
+fixmod_med_latenterr <- stan_model("../../bamr/exec/manning_latentsigma_medianA0.stan")
+
+newests_medA0_latenterr <- map2(bamdata_med, bampriors_med, 
+                 possibly(~bam_estimate(bamdata = .x, variant = "manning", 
+                                        bampriors = .y, 
+                                        stanmodel =  fixmod_med_latenterr, 
+                                        meas_error = FALSE, reparam = FALSE, 
+                                        iter = 2000,
+                                        cores = 3, chains = 3),
+                          otherwise = NA))
+```
+
+It's time to save the objects and take a more practiced approach. 
+
+- list of stanfit objects
+- list of bamdata objects
+- list of bampriors objects
+- stan model object
+- Text description of what the runs did
+
+```{r}
+bamruns1 <- list(ests = new_ests, data = bamdata_new, priors = bampriors_new, model = fixmod,
+              description = "new_ests, fixed Jacobian, hierarchical sigma_man")
+save(bamruns1, file = "../src/bam_experiments_pepsi1/bamruns1.RData")
+rm(bamruns1); gc()
+
+bamruns2 <- list(ests = new_ests_fixsigman, data = bamdata_new, priors = bampriors_new, 
+                 model = fixmod_fixsigman, 
+                 description = "new_ests_fixsigman, known Manning variance")
+save(bamruns2, file = "../src/bam_experiments_pepsi1/bamruns2.RData")
+rm(bamruns2); gc()
+
+bamruns3 <- list(ests = new_ests3, data = bamdata_new, priors = bampriors3, 
+                 model = fixmod_fixsigman,
+                 description = "new_ests3, known Manning variance, smaller A0 upperbound")
+save(bamruns3, file = "../src/bam_experiments_pepsi1/bamruns3.RData")
+rm(bamruns3); gc()
+
+bamruns4 <- list(ests = newests_medA0, data = bamdata_med, priors = bampriors_med, 
+                 model = fixmod_med,
+                 description = "newests_medA0, known Manning variance, median A0 and prior")
+save(bamruns4, file = "../src/bam_experiments_pepsi1/bamruns4.RData")
+rm(bamruns4); gc()
+
+bamruns5 <- list(ests = newests_medA0_latenterr, data = bamdata_med, priors = bampriors_med, 
+                 model = fixmod_med_latenterr,
+                 description = "newests_medA0_latenterr, hierarchical Manning variance, median A0 and prior")
+save(bamruns5, file = "../src/bam_experiments_pepsi1/bamruns5.RData")
+rm(bamruns5); gc()
+```
+
+
+
+

@@ -133,7 +133,8 @@ anova1df <- c(reachdata, list(sscase = sscase, uscase = uscase)) %>%
 anova1df %>% 
   ggplot(aes(x = case, y = pctTotVar, fill = piece)) +
   geom_bar(stat = "identity", position = "stack") +
-  theme(axis.text = element_text(angle = 90))
+  theme(axis.text = element_text(angle = 90)) +
+  xlab("")
 
 ```
 

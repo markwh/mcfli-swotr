@@ -577,8 +577,12 @@ plotdf <- left_join(tlboots, qimbdf, by = "caseid")
 ```{r}
 plotdf %>% 
   glimpse()
-ggplot(plotd f, aes(x = Qimb, y = x1)) + 
+ggplot(plotdf, aes(x = Qimb, y = x1)) + 
   geom_point(size = 0.5, position = position_jitter(width = 0.5), 
-             alpha = 0.2)
+             alpha = 0.2) +
+  xlab("Characteristic flow imblance, %") +
+  ylab("Estimated A0 for reach 1")
+
+
 ```
 

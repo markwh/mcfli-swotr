@@ -1,0 +1,38 @@
+---
+title: "Untitled"
+author: "Mark Hagemann"
+date: "May 31, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Trying to figure out why mixture treatment of logn and logQbar isn't working in stan. So I made a dummy model. dummymix.stan. See if it works!
+
+```{r}
+
+dummod <- stan_model("../stan/dummymix.stan")
+
+dumdat <- list(
+  zobs = rnorm(100, 3, 0.8),
+  xhat = 70,
+  x_sd = 1,
+  yhat = -4.5,
+  y_sd = 0.25,
+  z_sd = 0.8
+)
+
+opt1 <- optimizing(dummod, data = dumdat)
+opt1
+vb1 <- vb(dummod, data = dumdat)
+summary(vb1)$summary
+
+smp1 <- sampling(dummod, data = dumdat, cores = 3, chains = 3, iter = 10000)
+summary(smp1)$summary
+
+stan_trace(smp1, inc_warmup = TRUE) + theme_bw()
+pairs(smp1)
+```
+

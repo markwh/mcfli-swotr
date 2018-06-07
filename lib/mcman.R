@@ -390,3 +390,47 @@ prepdata <- function(swotlist) {
   out <- c(list0, list1)
   out
 }
+
+check_rhat <- function(stanfit, ..., plot = TRUE) {
+  rhats <- stan_rhat(stanfit, ...)$data
+  
+  if (plot) {
+    plot(rhats$stat, ylab = "Rhat statistic", xlab = "Parameter")
+  }
+  invisible(rhats)
+}
+
+max_rhat <- function(stanfit) {
+  rhats <- stan_rhat(stanfit)$data
+  max(rhats$stat)
+}
+
+
+# Peek at parameters ------------------------------------------------------
+
+mcman_peek <- function(swotlist, method = c("decomp", "anova"),
+                       par = c("mu_q", "sigma_q", "sigma_gprime", 
+                               "sigma_nubar", "sigma_man")) {
+  
+  method <- match.arg(method)
+  par <- match.arg(par, several.ok = TRUE)
+  meanQ <- apply(swotlist$Q, 2, function(x) mean(log(x)))
+  mu_q <- mean(meanQ)
+  sigma_q <- sd(meanQ)
+  
+  charclose <- characterize_closure(swotlist, method = method)
+  sigma_gprime <- charclose$dgdx
+  sigma_nubar <- charclose$nuhat
+  sigma_man <- charclose$err
+  
+  outlist <- list(mu_q = mu_q, sigma_q = sigma_q, sigma_gprime = sigma_gprime,
+                    sigma_nubar = sigma_nubar, sigma_man = sigma_man)
+  out <- as.data.frame(outlist[par])
+  out
+}
+
+mcman_sigma <- function(swotlist, mc = TRUE, na.rm = FALSE) {
+  clos <- manning_closure(swotlist, log = TRUE, mc = mc)
+  sigma <- mean(apply(clos, 1, sd, na.rm = na.rm), na.rm = na.rm)
+  sigma
+}
