@@ -1,0 +1,255 @@
+---
+title: "notebook20180607"
+author: "Mark Hagemann"
+date: "June 7, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Trying to get these bam runs through. I finally managed to update the package, but I had to switch to my laptop. Will likely remain here until I finish the Pepsi 2 runs. First verify and troubleshoot performance using Pepsi 1. These are the runs I will do:
+
+- Manning only
+    - no meas error
+        - unk_var = TRUE
+        - unk_var = FALSE
+    - reparam meas error
+        - unk_var = TRUE
+        - unk_var = FALSE
+    - latent meas error
+        - unk_var = TRUE
+        - unk_var = FALSE
+- Manning + AMHG
+    - no meas error
+        - unk_var = TRUE
+        - unk_var = FALSE
+    - reparam meas error
+        - unk_var = TRUE
+        - unk_var = FALSE
+    - latent meas error
+        - unk_var = TRUE
+        - unk_var = FALSE
+- AMHG only
+    - no meas error
+    - reparam meas error
+    - latent meas error
+
+That's 15 sets of runs total. That will take up not only my computing capacity, but also my human faculties. Cut this down to 6:
+
+- Manning only
+    - no meas error
+        - unk_var = TRUE
+        - unk_var = FALSE
+    - latent meas error
+        - unk_var = FALSE
+- Manning + AMHG
+    - no meas error
+        - unk_var = FALSE
+    - latent meas error
+        - unk_var = FALSE
+- AMHG only
+    - no meas error
+    - latent meas error
+
+That's actually 7. First see if unk_var actually improves things on Manning only.
+
+
+### Data and priors
+
+I can now use default priors, so that's a plus.
+
+```{r}
+library(bamr)
+library(rstan)
+swotlists <- reachdata[1:15] # Omit StLaw, Tanana, Wabash
+qhats <- Qhats[names(swotlists)] %>% 
+  map(~.[1])
+bamdatas <- map2(swotlists, qhats, ~bam_data(.x$W, .x$S, .x$dA, .y))
+otimes <- map(bamdatas, ~.$omitTimes)
+
+smartomit <- function(qvec, omit) {
+  if (length(omit) == 0) {
+    return(qvec)
+  } else {
+    return(qvec[-omit])
+  }
+}
+
+qobs <- swotlists %>% 
+  map(~apply(.$Q, 2, mean)) %>% 
+  map2(otimes, smartomit)
+
+map_int(qobs, length) == map_int(bamdatas, function(x) ncol(x$Wobs))
+
+```
+
+### Estimate
+
+```{r}
+ests1 <- map(bamdatas, ~bam_estimate(., variant = "manning", meas_error = FALSE, unk_var = FALSE))
+cache("ests1")
+rm(ests1)
+
+```
+
+```{r}
+mypars <- c("logQtn", "A0_med", "man_lhs", "logA_man", 
+              "logQnbar", "sigma_logQ", "Sact", "Wact", "dAact", 
+              "logW", "logS") #hotfix so I don't have to reinstall after finding small bamr bug
+
+ests2 <- map(bamdatas, ~bam_estimate(., variant = "manning", meas_error = FALSE, unk_var = TRUE,
+                                     pars = mypars))
+cache("ests2")
+ests3 <- map(bamdatas, ~bam_estimate(., variant = "manning", meas_error = TRUE, reparam = FALSE,
+                                     pars = mypars))
+cache("ests3")
+
+ests4 <- map(bamdatas, ~bam_estimate(., variant = "manning_amhg", meas_error = FALSE, 
+                                     pars = mypars))
+cache("ests4")
+
+ests5 <- map(bamdatas, ~bam_estimate(., variant = "manning_amhg", meas_error = TRUE, reparam = FALSE,
+                                     pars = mypars))
+cache("ests5")
+```
+
+Save these priors and datas too.
+
+
+Validating on desktop computer. Need to find out why areas are going so low. 
+
+```{r}
+testest <- bam_estimate(bamdatas$Kanawha, variant = "manning", meas_error = TRUE, 
+                        pars = "abc", reparam = TRUE)
+
+testlogAman <- get_posterior_mean(testest, "logA_man")
+head(testlogAman)
+dim(bamdatas$Kanawha$Wobs)
+postlogA <- testlogAman[, 4] %>% 
+  matrix(nrow = 4, byrow = TRUE)
+
+plot_DAWG(postlogA)
+
+
+
+```
+```{r}
+testlhs <- get_posterior_mean(testest, "man_lhs")
+head(testlhs)
+postlhs <- testlhs[, 4] %>% 
+  matrix(nrow = 4, byrow = TRUE)
+
+plot_DAWG(postlhs)
+```
+
+
+
+```{r}
+postA0min <- get_posterior_mean(testest, "A0")
+postA0med <- get_posterior_mean(testest, "A0_med")
+```
+
+
+What's the sscase do?
+
+```{r}
+ssbamdata <- with(sscase, bam_data(W, S, dA, 200))
+plot(ssbamdata)              
+
+ssest <- bam_estimate(ssbamdata, "manning", meas_error = FALSE)
+
+get_posterior_mean(ssest, "A0")
+get_posterior_mean(ssest, "logQ") %>% 
+  `[`(, 4) %>% 
+  exp()
+
+```
+
+```{r}
+sscase$Q %>% apply(2, mean)
+```
+
+Try with old version of Manning model
+
+```{r}
+# oldmod <- stan_model("../src/manning_nolatent_old.stan")
+oldmod <- stan_model("../../bamr/exec/manning_nolatent.stan")
+
+oldpriors <- bam_priors(bamdatas$Kanawha, logA0_sd = 0.5)
+
+oldest <- bam_estimate(bamdatas$Kanawha, bampriors = oldpriors, 
+                       variant = "manning", meas_error = FALSE,
+                       pars = "abc",
+                        # pars = c("man_lhs", "man_rhs", "logA_man"),
+                       stanmodel = oldmod, iter = 1000)
+
+oldlhs <- get_posterior_mean(oldest, "man_lhs")
+# oldrhs <- get_posterior_mean(oldest, "man_rhs")
+oldlhsmat <- oldlhs[, 4] %>% 
+  matrix(nrow = 4, byrow = TRUE)
+# oldrhsmat <- oldrhs[, 4] %>% 
+  # matrix(nrow = 4, byrow = TRUE)
+# plot_DAWG(oldlhsmat - oldrhsmat)
+
+oldlogA <- get_posterior_mean(oldest, "logA_man")[, 4] %>% 
+  matrix(nrow = 4, byrow = TRUE)
+
+plot_DAWG(oldlogA)
+
+plot_DAWG(manning_qdot(reachdata$Kanawha, log = TRUE))
+plot_DAWG(oldlhsmat)
+plot_DAWG(manning_closure(reachdata$Kanawha, log = TRUE))
+
+oldinps <- bamr:::compose_bam_inputs(bamdatas$Kanawha)
+oldsigman <- oldinps$sigma_man
+oldlhs_real <- with(reachdata$Kanawha %>% 
+                      swot_sset(keeptimes = -bamdatas$Kanawha$omitTimes), 
+                    (((5 / 3 * log(A)) - 
+                      (2 / 3 * log(W)) + 
+                      (1 / 2 * log(S))) / oldsigman))
+olr2 <- oldlhs_real - swot_vec2mat(apply(oldlhs_real, 2, mean), oldlhs_real)
+
+plot_DAWG(oldlhsmat)
+plot_DAWG(olr2)
+
+sum(oldlhsmat^2)
+sum(olr2^2)
+
+pripost_q(bampriors = bam_priors(bamdatas$Kanawha), stanfit = oldest, 
+          true_Q = qobs$Kanawha)
+```
+
+Checking against batman_log. That gives really good estimates for A0, at least for Kanawha. Observe:
+
+```{r}
+foocase <- reachdata$Kanawha %>% 
+  swot_purge_nas("times")
+foocase$dA <- rezero_dA(foocase$dA, "median")
+batman_A0 <- batman_log(foocase)$A0
+batman_logQn <- batman_log(foocase)$logQn
+
+foocase$Ahat <- foocase$dA + swot_vec2mat(batman_A0, foocase$dA)
+
+batman_lhs <- manning_qdot(foocase, Avar = "Ahat", log = TRUE)
+
+plot_DAWG(batman_lhs)
+plot_DAWG(batman_lhs - swot_vec2mat(batman_logQn, foocase$dA))
+
+```
+
+```{r}
+oldinps <- bamr:::compose_bam_inputs(bamdatas$Kanawha)
+oldopts <- optimizing(oldmod, data = oldinps, iter = 10000,
+                      tol_rel_grad = 1e-10,
+                      tol_rel_obj = 1e-10)
+oldopts$par[paste0("A0[", 1:4, "]")]
+
+testopts <- optimizing(bamr:::stanmodels$manning_nolatent, data = oldinps)
+testopts$par[paste0("A0[", 1:4, "]")]
+
+get_posterior_mean(oldest, par = "A0")
+stan_trace(oldest, "A0")
+```
+

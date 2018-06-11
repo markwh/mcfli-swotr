@@ -58,6 +58,17 @@ defunct_batman_log <- function(swotlist, ...) {
   out
 }
 
+batman_A0priorfun <- function(Wmat) {
+  lwbar <- apply(log(Wmat), 1, mean)
+  lwsd <- apply(log(Wmat), 1, sd)
+  logA0hat <- -1.4058 + 1.4931 * lwbar - 0.2293 * lwsd
+  logA0hat
+  
+  outfun <- function(A0) {
+    log()
+  }
+}
+
 batman_log <- function(swotlist, steptol = 1e-12, gradtol = 1e-12, ...) {
   W <- swotlist$W
   dA <- swotlist$dA
@@ -79,7 +90,6 @@ batman_log <- function(swotlist, steptol = 1e-12, gradtol = 1e-12, ...) {
     
     objmat <- (X + 5/3 * log(A) - logQnmat)^2
     obj <- sum(objmat)
-    
     
     obj
   }
@@ -105,20 +115,6 @@ batman_log <- function(swotlist, steptol = 1e-12, gradtol = 1e-12, ...) {
 
   inits <- c(initA0, initlogQn)
   
-  # browser()
-  
-
-  # optres <- nlminb(start = inits, objfun,
-  #                  lower = c(rep(0, length(initA0)),
-  #                            rep(-5, length(initlogQn))),
-  #                  ...)
-  # 
-  # ests <- optres$par
-  # code <- optres$convergence
-  # minval <- optres$objective
-  
-
-
   optres <- nlm(objfun, p = inits, steptol = steptol, gradtol = gradtol, ...)
   ests <- optres$estimate
   code <- optres$code
@@ -131,21 +127,6 @@ batman_log <- function(swotlist, steptol = 1e-12, gradtol = 1e-12, ...) {
               obj = minval)
   out
 }
-
-# batman_log(sscase)
-# batman_log(sscase, gradtol = 1e-10, steptol = 1e-10)
-# batman_log(sscase, steptol = 1e-10)
-# batman_log(sscase, iterlim= 500)
-# 
-# trueA0 <- with(sscase, A - dA)[, 1]
-# truelogQn <- with(sscase, apply(log(Q * 0.04), 2, mean))
-# trueA <- swot_vec2mat(trueA0, sscase$W) + sscase$dA
-# truerhs <- with(sscase, -2/3 * log(W) + 1/2 * log(S) + 5/3 * log(trueA))
-# truesigsq <- sd(truerhs - swot_vec2mat(truelogQn, truerhs))^2
-# 
-# truepars <- c(trueA0, truelogQn, truesigsq)
-# objfun(truepars)
-
 
 batman_linA <- function(swotlist, ...) {
   W <- swotlist$W
@@ -183,9 +164,9 @@ batman_linA <- function(swotlist, ...) {
   code <- optres$code 
   
   A0ests <- ests[max(times) + reaches]
-  logQnests <- ests[times]
+  Qnests <- ests[times] ^ (5/3)
 
-  out <- list(A0 = A0ests, logQn = logQnests, code = code, 
+  out <- list(A0 = A0ests, Qn = Qnests, code = code, 
               obj = optres$minimum)
   out
 }

@@ -1,0 +1,460 @@
+---
+title: "notebook20180608"
+author: "Mark Hagemann"
+date: "June 8, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Trying a simplified stan file to verify Jacobian. 
+
+
+```{r}
+nx <- 10
+nt <- 100
+mu <- runif(1, 0, 10)
+
+sigma_z <- runif(1, 0, 0.3)
+# z <- rnorm(nt, mu, sigma_z)
+z <- arima.sim(model = list(ar = c(0.9, -0.1)), n = nt)
+z <- (z - mean(z)) * sigma_z / sd(z) + mu
+
+errmat <- matrix(rnorm(nx * nt, 0, sigma_err), nrow = nx)
+lhs <- swot_vec2mat(z, errmat) + errmat
+
+mu_logA53 <- runif(nx, 0, 5)
+logA53 <- lhs + matrix(rnorm(nx * nt, rep(mu_logA53, nt), sigma_z / 2),
+                       nrow = nx, byrow = FALSE)
+logx <- lhs - logA53
+mu_logA <- mu_logA53 * 3 / 5
+logA <- 3 / 5 * logA53
+
+A0vec <- apply(exp(logA), 1, min)
+dA <- exp(logA) %>% - swot_vec2mat(A0vec, logA)
+dA_shift <- apply(dA, 1, function(x) median(x) - min(x))
+
+obslist <- list(
+  nx = nx,
+  nt = nt,
+  dAobs = dA,
+  dA_shift = dA_shift,
+  xobs = exp(logx),
+  sigma_err = swot_vec2mat(rep(sigma_err, nx), dA),
+  z_hat = 1,
+  muz_sd = 1,
+  logA0_hat = rep(2.5, 10),
+  logA0_sd = 1.5
+)
+
+
+```
+
+```{r}
+dummymod <- stan_model("../src/dummy_nolatent.stan")
+dummyopt <- optimizing(dummymod, data = obslist)
+
+A0hat <- dummyopt$par[paste0("A0[", 1:nx, "]")]
+
+plot(A0hat, A0vec); abline(0, 1)
+
+dummyest <- sampling(dummymod, data = obslist, chains = 3, cores = 3)
+
+stan_trace(dummyest, pars = "A0")
+
+dummymean <- get_posterior_mean(dummyest, par = "A0")[, 4]
+dummymean
+
+plot(dummymean, A0vec); abline(0, 1)
+
+```
+
+
+```{r}
+# saving various versions here
+# dummyest_noprior <- dummyest
+```
+
+Can I use this model with Kanawha?
+
+```{r}
+dummymod <- stan_model("../src/dummy_nolatent.stan")
+kanlist <- bamr:::compose_bam_inputs(bamdatas$Kanawha)
+dumkanlist <- with(kanlist, list(
+  nx = nx,
+  nt = nt,
+  dAobs = dAobs,
+  dA_shift = dA_shift,
+  xobs = exp(1/2 * log(Sobs) - 2/3 * log(Wobs)),
+  sigma_err = sigma_man,
+  z_hat = logQ_hat + logn_hat,
+  muz_sd = sqrt(logQ_sd^2 + logn_sd^2),
+  logA0_hat = logA0_hat,
+  logA0_sd = logA0_sd
+))
+
+dumkanopt <- optimizing(dummymod, data = dumkanlist)
+dumkanopt$par[paste0("A0[", 1:4, "]")]
+
+dumkanest <- sampling(dummymod, data = dumkanlist, chains = 3, cores = 3)
+
+stan_trace(dumkanest, pars = "A0")
+stan_trace(dumkanest, pars = "lp__", inc_warmup = TRUE)
+
+dumkanmean <- get_posterior_mean(dumkanest, par = "A0")[, 4]
+dumkanmean
+
+dumkanlhs <- get_posterior_mean(dumkanest, "lhs")
+# oldrhs <- get_posterior_mean(oldest, "man_rhs")
+dumkanlhsmat <- dumkanlhs[, 4] %>% 
+  matrix(nrow = 4, byrow = TRUE)
+
+plot_DAWG(dumkanlhsmat)
+sum(dumkanlhsmat^2)
+```
+
+So Kanawha still fails (even more epically!) on dummy model. 
+
+Make a modified version of dummy dataset that I can run through bamr and see how it works.
+
+```{r}
+nx <- 20
+nt <- 100
+mu <- runif(1, 0, 10)
+
+sigma_z <- runif(1, 0.5, 1.5)
+z <- rnorm(nt, mu, sigma_z)
+# z <- arima.sim(model = list(ar = c(0.95, -0.2)), n = nt)
+# z <- (z - mean(z)) * sigma_z / sd(z) + mu
+
+sigma_err <- runif(1, 0, 0.3)
+errmat <- matrix(rnorm(nx * nt, 0, sigma_err), nrow = nx)
+lhs <- swot_vec2mat(z, errmat) + errmat
+
+mu_logA53 <- runif(nx, 5, 8)
+logA53 <- lhs + matrix(rnorm(nx * nt, rep(mu_logA53, nt), sigma_z / 2),
+                       nrow = nx, byrow = FALSE)
+logx <- lhs - logA53
+
+neglogW23 <- logx / 2
+logS12 <- logx - neglogW23
+W <- exp(-3/2 * neglogW23)
+S <- exp(2 * logS12)
+
+mu_logA <- mu_logA53 * 3 / 5
+logA <- 3 / 5 * logA53
+
+A0vec <- apply(exp(logA), 1, min)
+dA <- exp(logA) %>% - swot_vec2mat(A0vec, logA)
+dA_shift <- apply(dA, 1, function(x) median(x) - min(x))
+
+obslist <- list(
+  nx = nx,
+  nt = nt,
+  dAobs = dA,
+  dA_shift = dA_shift,
+  Wobs = W,
+  Sobs = S,
+  sigma_man = swot_vec2mat(rep(sigma_err, nx), dA),
+  logQ_hat = 5,
+  logQ_sd = 2,
+  logn_hat = -3.5,
+  logn_sd = 0.25,
+  logA0_hat = rnorm(nx, log(A0vec), 0.25),
+  logA0_sd = 0.25,
+  lowerbound_logQ = 1,
+  upperbound_logQ = 20,
+  lowerbound_logn = -10,
+  upperbound_logn = 10,
+  lowerbound_A0 = 0,
+  upperbound_A0 = 1e5
+)
+
+
+testmod <- stan_model("../../bamr/exec/manning_nolatent.stan")
+testmod2 <- bamr:::stanmodels$manning_nolatent
+
+testbam <- optimizing(testmod, data = obslist, iter = 10000)
+testbam2 <- optimizing(testmod2, data = obslist, iter = 10000)
+A0hat <- testbam$par[paste0("A0[", 1:nx, "]")]
+A0hat2 <- testbam2$par[paste0("A0[", 1:nx, "]")]
+# plot(A0hat)
+# plot(testbam$par[paste0("logQ[", 1:nt, "]")])
+# plot(exp(z))
+
+# testbam <- sampling(testmod, data = obslist, cores = 3, chains = 3)
+# A0hat <- get_posterior_mean(testbam, pars = "A0")[, 4]
+# stan_trace(testbam, "A0")
+
+testsl <- list(W = W, S = S, dA = dA)
+plot(estA0(testsl), A0vec); abline(0, 1)
+A0hat_nlm <- batman_log(testsl, 1e-10, 1e-10, iterlim = 1000)
+plot(A0hat_nlm$A0, A0vec); abline(0, 1)
+plot(A0hat, A0vec); abline(0, 1)
+plot(A0hat2, A0vec); abline(0, 1)
+```
+
+This has to be a Jacobian issue.
+
+
+I'm about at my wit's end. I need to make a pared down version of the stan model that I can use with the same dataset--or a simple transformation thereof (i.e. consolidate S and W, pre-log, etc.)
+
+- x = 1/2 logS - 2/3 logW
+- y = logQtn
+- no bounds
+- mu_hat = logQ_hat + logn_hat
+- mu_sd = logQ_sd
+- sigma_y = sigma_logQ
+- sigma_err = sigma_man
+- logA = logA_man
+- z = man_lhs
+- ns = nx
+- mu = logQnbar
+- dA = dA_pos
+
+
+```{r}
+pare_baminps <- function(baminplist) {
+  out <- with(baminplist, list(
+    ns = nx,
+    nt = nt,
+    x = 1/2 * log(Sobs) - 2/3 * log(Wobs),
+    dA = rezero_dA(dAobs, "minimum"),
+    dA_shift = dA_shift,
+    sigma_err = median(sigma_man),
+    mu_hat = logQ_hat + logn_hat,
+    mu_sd = logQ_sd,
+    logA0_hat = logA0_hat,
+    logA0_sd = logA0_sd
+  ))
+  out
+}
+
+# fooinps <- pare_baminps(bamr:::compose_bam_inputs(bamdatas$Kanawha))
+fooinps <- pare_baminps(obslist)
+
+paremod <- stan_model("../src/manning_pared.stan")
+pareopt <- optimizing(paremod, fooinps)
+
+
+A0hat_pare = pareopt$par[paste0("A0[", 1:fooinps$ns, "]")]
+plot(A0hat_pare, A0vec); abline(0, 1)
+
+```
+
+Now make a new data generating function that simulates pared data exactly.
+
+```{r}
+
+simfun_pare <- function() {
+  nx <- 10
+  nt <- 100
+  mu <- rnorm(1, 5, 3)
+  
+  sigma_y <- runif(1, 0.5, 1.5)
+  
+  y <- arima.sim(model = list(ar = c(0.95, -0.2)), n = nt)
+  y <- (y - mean(y)) * sigma_y / sd(y) + mu
+  
+  # y <- rnorm(nt, mu, sigma_y)
+  sigma_err <- runif(1, 0, 0.3)
+  
+  ymat <- matrix(rep(y, nx), nrow = nx, byrow = TRUE)
+  errmat <- matrix(rnorm(nx * nt, 0, sigma_err), nrow = nx)
+  lhs <-  ymat + errmat
+  
+  mu_logA <- runif(nx, 5, 8)
+  logA <- lhs + matrix(rnorm(nx * nt, mu_logA, sigma_y / 2),
+                       nrow = nx, byrow = FALSE)
+  x <- lhs - 5/3 * logA
+  
+  A0vec <- apply(exp(logA), 1, min)
+  A0mat <- matrix(rep(A0vec, nt), nrow = nx, byrow = FALSE)
+  dA <- exp(logA) - A0mat
+  dA_shift <- apply(dA, 1, function(x) median(x) - min(x))
+  
+  obs <- list(
+    ns = nx, 
+    nt = nt,
+    x = x,
+    dA = dA,
+    dA_shift = dA_shift,
+    sigma_err = sigma_err,
+    mu_hat = 5,
+    mu_sd = 3,
+    logA0_hat = rnorm(nx, mu_logA, 0.5),
+    logA0_sd = 0.5
+  )
+  
+  truth <- list(
+    y = y,
+    sigma_y = sigma_y,
+    mu = mu, 
+    A0 = A0vec,
+    z = (x + 5/3 * logA - ymat) / sigma_err,
+    logA = logA
+  )
+  out <- list(obs = obs, truth = truth)
+}
+```
+
+
+
+```{r}
+paremod <- stan_model("../src/manning_pared.stan")
+paresim <- simfun_pare()
+pareopt <- optimizing(paremod, data = paresim$obs)
+A0hat_pare <- pareopt$par[paste0("A0[", 1:paresim$obs$ns, "]")]
+plot(A0hat_pare, paresim$truth$A0); abline(0, 1)
+```
+
+```{r}
+paresamp <- sampling(paremod, data = paresim$obs, cores = 3, chains = 3)
+
+stan_trace(paresamp, pars = "A0[1]")
+```
+
+
+Is that it? Did I fix it?
+
+```{r}
+pbi1 <- bamdatas$Kanawha %>% 
+  bamr:::compose_bam_inputs() %>% 
+  pare_baminps()
+
+# pbi1$logA0_sd <- 0.4
+
+pb1_opt <- optimizing(paremod, data = pbi1)
+
+pb1_samp <- sampling(paremod, data = pbi1, cores = 3, chains = 3)
+
+plot(pb1_opt$par[paste0("A0[", 1:4, "]")])
+
+pb1_samp %>% 
+  as.matrix(pars = "A0") %>% 
+  posterior_interval()
+
+realA0(reachdata$Kanawha, "minimum")
+
+```
+
+I think that did it! Quick validation:
+
+```{r}
+pareinps <- bamdatas %>% 
+  map(bamr:::compose_bam_inputs) %>% 
+  map(pare_baminps) %>% 
+  map(function(x) {x$logA0_sd = 0.1; x})
+
+pareopts_all <- pareinps %>% 
+  map(~optimizing(paremod, data = ., as_vector = FALSE)$par[["A0"]])
+
+realA0s_all <- reachdata[names(bamdatas)] %>% 
+  map(~realA0(., rezero = "minimum"))
+
+plot(unlist(pareopts_all), 
+     unlist(realA0s_all), log = "xy"); abline(0,1)
+
+```
+
+
+```{r}
+
+Poests <- bamdatas$Seine %>% 
+  bamr:::compose_bam_inputs() %>% 
+  pare_baminps() %>% 
+  sampling(paremod, data = ., chains = 3, cores = 3)
+
+Poests %>% 
+  as.matrix(pars = "A0") %>% 
+  posterior_interval()
+```
+
+```{r}
+
+sampintervals <- list()
+maxrhats <- list()
+for (i in 1:length(pareinps)) {
+  sampsi <- sampling(paremod, data = pareinps[[i]], cores = 3, chains = 3,
+                     iter = 2000, warmup = 1200,
+                     control = list(adapt_delta = 0.99))
+  sampintervals[[i]] <- posterior_interval(as.matrix(sampsi, pars = "A0"))
+  maxrhats[[i]] <- max_rhat(sampsi)
+}
+```
+
+```{r}
+sampintdf <- sampintervals %>% 
+  setNames(names(pareinps)) %>% 
+  map2(maxrhats, 
+       ~mutate(as.data.frame(.x), par = rownames(.x), maxrhat = .y)) %>% 
+  bind_rows(.id = "case")
+
+realA0s_all_df <- realA0s_all %>% 
+  map(~data.frame(par = paste0("A0[", 1:length(.), "]"),
+                  realA0 = .)) %>% 
+  setNames(names(realA0s_all)) %>% 
+  bind_rows(.id = "case")
+
+left_join(sampintdf, realA0s_all_df, by = c("case", "par")) %>% 
+  ggplot(aes(x = case, y = realA0, ymin = `5%`, ymax = `95%`)) +
+  geom_linerange(color = "red") +
+    geom_point() + 
+  scale_y_log10()
+
+
+```
+
+
+Now I have this implemented in manning_nolatent.stan. How does it work?
+
+```{r}
+testmod <- stan_model("../../bamr/exec/manning_nolatent.stan")
+
+testopts <- bamdatas$Kanawha %>% 
+  bamr:::compose_bam_inputs() %>% 
+  # pare_baminps() %>% 
+  # optimizing(paremod, data = ., as_vector = FALSE)
+  optimizing(testmod, data = ., as_vector = FALSE)
+
+testopts$par$A0
+
+testsamps <- bamdatas$Kanawha %>% 
+  bamr:::compose_bam_inputs() %>% 
+  sampling(testmod, data = ., chains = 3, cores = 3)
+
+testsamps %>% 
+  as.matrix(pars= "A0") %>% 
+  posterior_interval()
+```
+
+This is a good place to call it a night. I've made good progress this weekend! Salient bits to report:
+
+- Sorted out question of Jacobian with help of Ben Goodrich
+- Created a simplified model, solidifying understanding of generative model
+    - Function to generate datasets that obey the simplified model
+    - function to transform bamr datasets into datasets for simplified model
+- Created a function/workflow for generating McMan-adherent data
+- Validated optimization approach to estimating A0 on Pepsi 1 datasets
+- Spot-checked sampling approach to estimating A0 on a couple Peps 1 cases (Kanawha, Platte)
+- Finalized (preliminarily) manning_nolatent stan model
+    - preserves space-and-time varying sigma_man
+- Showed that at least for optimization approach a prior on sigma_man is no good.
+- Showed that at least for optimization approach using an artificially small logA0_sd is beneficial.
+
+First items of business for new workweek:
+
+- Communicate relevant bits from above to research group
+- Do Pepsi 1 runs, compare results to previous
+- Modify other stan files
+    - Consolidate via if-then logic
+- Spot-check (at least) the following behavior
+    - Manning-AMHG
+    - AMHG-only
+    - Measurement error
+        - reparameterized
+        - Hierarchical
+- Commit, push to github
+- Do Pepsi 2 runs

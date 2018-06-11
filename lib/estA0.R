@@ -204,7 +204,15 @@ estA0_moddf <- function(ws35mat, dAmat, xvec = NULL, weight = !is.null(xvec),
 }
 
 
-realA0 <- function(swotlist) {
-  out <- with(swotlist, A - dA)[, 1]
+realA0 <- function(swotlist, 
+                   rezero = c("none", "first", "minimum", "median")) {
+  rezero = match.arg(rezero)
+  
+  dA <- swotlist$dA
+  if (rezero != "none") {
+    dA <- rezero_dA(dA, zero = rezero)
+  }
+  
+  out <- (swotlist$A - dA)[, 1]
   out
 }
