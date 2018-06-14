@@ -1,0 +1,320 @@
+---
+title: "notebook20180611"
+author: "Mark Hagemann"
+date: "June 11, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Now that I've resolved the Jacobian issue and I have a clearer view of how to apply these models, do the following:
+
+- Run Pepsi 2 using new manning_nolatent model
+- Rerun with tighter A0 priors if no convergence.
+
+```{r}
+library(rstan)
+testmod <- stan_model("../../bamr/exec/manning_nolatent.stan")
+```
+
+Prep data (copied from 0607 notebook)
+
+```{r}
+library(bamr)
+swotlists <- reachdata[1:15] # Omit StLaw, Tanana, Wabash
+qhats <- Qhats[names(swotlists)] %>% 
+  map(~.[1])
+bamdatas <- map2(swotlists, qhats, ~bam_data(.x$W, .x$S, .x$dA, .y))
+otimes <- map(bamdatas, ~.$omitTimes)
+
+smartomit <- function(qvec, omit) {
+  if (length(omit) == 0) {
+    return(qvec)
+  } else {
+    return(qvec[-omit])
+  }
+}
+
+qobs <- swotlists %>% 
+  map(~apply(.$Q, 2, mean)) %>% 
+  map2(otimes, smartomit)
+
+baminps <- map(bamdatas, bamr:::compose_bam_inputs)
+```
+
+Do those runs.
+
+Start with one of just Manning, with and without meas error.
+
+```{r}
+samps1 <- sampling(testmod, data = baminps$Cumberland, 
+                   cores = 3, chains = 3)
+bam_hydrograph(samps1, qobs$Cumberland)
+check_rhat(samps1)
+cache("samps1")
+
+samps2 <- sampling(testmod, data = baminps$Po, cores = 3, chains = 3)
+cache("samps2")
+check_rhat(samps2)
+stan_trace(samps2, pars = paste0("A0[", 1:8, "]"))
+bam_hydrograph(samps2, qobs$Po)
+```
+
+I wonder if logQ_sd prior is affecting this? I could inform this better using W stats. 
+
+```{r}
+sdQs <- reachdata %>% 
+  map_dbl(~sd(apply(.$Q, 2, function(x) mean(log(x)))))
+sdWs <- reachdata %>% 
+  map_dbl(~sd(apply(.$W, 2, function(x) mean(log(x)))))
+
+meanAs <- reachdata %>% 
+  map(~apply(.$A, 1, function(x) median(log(x))))
+
+logA0hats <- baminps %>% 
+  map(~.$logA0_hat)
+
+plot(unlist(meanAs[names(logA0hats)]), unlist(logA0hats)); abline(0, 1)
+
+hist(sdQs)
+plot(sdWs, sdQs)
+
+
+
+```
+
+
+
+```{r}
+samplist <- list()
+for (i in 1:length(baminps)) {
+  sampsi <- sampling(object = testmod, data = baminps[[i]], 
+                     cores = 3, chains = 3)
+  samplist[[i]] <- sampsi
+}
+names(samplist) <- names(baminps)
+cache("samplist")
+```
+
+
+
+Now trying a HydroSWOT-informed prior on sigma_logQ.
+
+```{r}
+estimate_sigmalogQ <- function(Wobs, Hobs) {
+  lwsd <- apply(log(Wobs), 1, sd)
+  hsd <- apply(Hobs, 1, sd)
+  sigmahatlogQ <- 0.6165 + 0.64 * lwsd + 0.1899 * hsd
+  sigmahatlogQ
+}
+
+# standard deviation should be sqrt(gcv(qsdlm)) = 0.334.
+```
+
+Try it for Po (even though it will take a while)
+
+- Without hydroswot (blind prior) this is not much worse, with sd = 0.41
+
+
+```{r}
+baminps$Po$sigmahat_logQ = 0.943
+baminps$Po$sigmasd_logQ = 0.334
+
+samps3 <- sampling(testmod, data = baminps$Po, cores = 3, chains = 3, iter = 1000)
+
+pairs(samps3, pars = c("logn", "sigma_logQ"))
+
+check_rhat(samps3)
+
+bam_hydrograph(samps3, qobs$Po)
+get_posterior_mean(samps3, par = "sigma_logQ")
+stan_trace(samps3, pars = "sigma_logQ")
+
+
+
+stan_trace(samps2, pars = "sigma_logQ")
+```
+
+```{r}
+testmod <- stan_model("../../bamr/exec/manning_nolatent.stan")
+
+samps4 <- sampling(testmod, data = baminps$Po,
+                   cores = 3, chains = 3, iter = 2000)
+
+bam_hydrograph(samps4, qobs$Po) + scale_y_log10()
+check_rhat(samps4)
+stan_trace(samps4, pars = "logn")
+stan_trace(samps4, pars = c("truesigma_man", "sigma_logQ", "logQbar"), inc_warmup = FALSE)
+
+```
+
+What if I tighten the A0 prior?
+
+```{r}
+samps5 <- baminps$Po %>% 
+  # within(., {sigma_man = sigma_man / 2.5}) %>% 
+  sampling(testmod, data = ., cores = 3, chains = 3, iter = 2000)
+check_rhat(samps5)
+stan_trace(samps5, "logn")
+check_hmc_diagnostics(samps5)
+get_posterior_mean(samps5, pars = c("logn", "sigma_logQ", "logQbar"))
+stan_trace(samps5, pars = c("logn", "sigma_logQ", "logQbar"), inc_warmup = FALSE)
+stan_trace(samps5, "A0")
+bam_hydrograph(samps5, qobs$Po)
+
+opts5 <- baminps$Po %>% 
+  within(., {sigma_man = sigma_man / 2.5}) %>%
+  optimizing(testmod, data = ., as_vector = FALSE, tol_grad = 1e-15,
+             tol_rel_grad = 1e-13, tol_rel_obj = 1, iter = 10000)
+
+opts5$par$logn
+opts5$par$logQ %>% exp() %>% plot(type = "l")
+points(qobs$Po)
+```
+
+No idea why this stuff isn't working anymore. Can I go back to my pared model? If that works then mine should too.
+
+```{r}
+pare_baminps <- function(baminplist) {
+  out <- with(baminplist, list(
+    ns = nx,
+    nt = nt,
+    x = 1/2 * log(Sobs) - 2/3 * log(Wobs),
+    dA = rezero_dA(dAobs, "minimum"),
+    dA_shift = dA_shift,
+    sigma_err = median(sigma_man),
+    mu_hat = logQ_hat + logn_hat,
+    mu_sd = sqrt(logQ_sd^2 + logn_sd^2),
+    logA0_hat = logA0_hat,
+    logA0_sd = logA0_sd
+  ))
+  out
+}
+
+paremod <- stan_model("../src/manning_pared.stan")
+
+pareopts1 <- baminps$Po %>% 
+  pare_baminps() %>% 
+  optimizing(paremod, ., as_vector = FALSE)
+
+pareopts1$par$truesigma_err
+pareopts1$par$sigma_y
+
+paresamps1 <- baminps$Po %>% 
+  pare_baminps() %>% 
+  sampling(paremod, data = ., chains = 3, cores = 3, iter = 2000)
+
+
+get_posterior_mean(paresamps1, pars = "A0")
+stan_trace(paresamps1, pars = "A0")
+get_posterior_mean(paresamps1, pars = c("truesigma_err", "sigma_y"))
+pairs(paresamps1, pars = c("truesigma_err", "sigma_y", "mu"))
+check_hmc_diagnostics(paresamps1)
+check_rhat(paresamps1)
+
+```
+
+
+Is this just a function of the number of reaches? Do other cases work better?
+
+```{r}
+pareopts2 <- baminps$MississippiUpstream %>%
+  pare_baminps() %>% 
+  optimizing(paremod, ., as_vector = FALSE)
+
+pareopts2$par$truesigma_err
+pareopts2$par$sigma_y
+
+paresamps2 <- baminps$MississippiUpstream %>% 
+  # within(., {logA0_sd = 0.1}) %>% 
+  pare_baminps() %>% 
+  sampling(paremod, data = ., chains = 3, cores = 3, iter = 10000, thin = 10)
+
+
+get_posterior_mean(paresamps2, pars = "A0")
+stan_trace(paresamps2, pars = "A0", inc_warmup = TRUE) + xlim(0, 1000)
+get_posterior_mean(paresamps2, pars = c("truesigma_err", "sigma_y"))
+stan_trace(paresamps2, pars = c("truesigma_err", "sigma_y", "mu")) + xlim(0, 1000)
+pairs(paresamps2, pars = c("truesigma_err", "sigma_y", "mu"))
+check_hmc_diagnostics(paresamps2)
+check_rhat(paresamps2)
+```
+
+
+
+Can I do any better at guessing sigma_logQ a priori?
+
+```{r}
+realsiglogQs <- map_dbl(reachdata, ~mean(apply(.$Q, 1, function(x) sd(log(x)))))
+
+logWSsds <- map(reachdata, function(x) 1/2 * log(x$S) - 2/3 * log(x$W)) %>% 
+  map_dbl(., function(x) mean(apply(x, 1, function(y) sd(y))))
+
+logWSsds
+
+plot(logWSsds, realsiglogQs)
+
+sdlogQ_hat <- function(swotlist) {
+  # logA0hat <- swot_vec2mat(bamr:::estimate_logA0(swotlist$W), swotlist$dA)
+  # logAhat <- log(exp(logA0hat) + rezero_dA(swotlist$dA, "median"))
+  A0hat <- swot_vec2mat(estA0(swotlist), swotlist$dA)
+  logAhat <- log(A0hat + swotlist$dA)
+  logQnhat <- 5 / 3 * logAhat + with(swotlist, 1/2 * log(S) - 2/3 * log(W))
+  out <- apply(logQnhat, 1, sd, na.rm = TRUE)
+  out
+}
+
+sdlogQ_hat(reachdata$Po)
+
+sds1 <- reachdata[1:15] %>% 
+  map(~apply(.$Q, 1, function(x) sd(log(x), na.rm = TRUE))) %>% 
+  unlist()
+sds2 <- unlist(map(reachdata[1:15], sdlogQ_hat))
+plot(sds1, sds2); abline(0, 1)
+```
+
+
+I'm now reasonably well satisfied with the manning_nolatent model. Next I need to test its performance with observation error. 
+
+```{r}
+# pluck from bam_estimate:
+baminputs <- baminps$Po %>% 
+  within(., {sigma_man = sigma_man / 25})
+logS_sigsq_obs <- bamr:::ln_sigsq(obs = baminputs$Sobs, err_sigma = baminputs$Serr_sd)
+logW_sigsq_obs <- bamr:::ln_sigsq(obs = baminputs$Wobs, err_sigma = baminputs$Werr_sd)
+baminputs$sigma_man <- sqrt(baminputs$sigma_man^2 + 
+                            logS_sigsq_obs * (3/6)^2 + 
+                            logW_sigsq_obs * (4/6)^2)
+baminputs$sigma_amhg <- sqrt(baminputs$sigma_amhg^2 + 
+                             logW_sigsq_obs)
+plot_DAWG(baminputs$sigma_man)
+
+```
+
+```{r}
+samps6 <- baminputs %>% 
+  sampling(testmod, data = ., cores = 3, chains = 3, iter = 2000)
+check_rhat(samps6)
+stan_trace(samps6, "logn")
+check_hmc_diagnostics(samps6)
+get_posterior_mean(samps6, pars = c("logn", "sigma_logQ", "logQbar"))
+stan_trace(samps6, pars = c("logn", "sigma_logQ", "logQbar"), inc_warmup = FALSE)
+stan_trace(samps6, pars = c("sigma_logQ"), inc_warmup = TRUE) + ylim(0, 3)
+stan_trace(samps6, "A0")
+bam_hydrograph(samps6, qobs$Po)
+```
+
+Now try manning.stan.
+
+```{r}
+testmod2 <- stan_model("../../bamr/exec/manning.stan")
+
+samps7 <- baminps$Kanawha %>% 
+  within(., {sigma_man = sigma_man / 2.5}) %>% 
+  sampling(object = testmod2, data = ., cores = 3, chains = 1, iter = 1000)
+
+bam_hydrograph(samps7, qobs$Kanawha)
+```
+

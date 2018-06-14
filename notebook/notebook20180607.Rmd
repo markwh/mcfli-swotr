@@ -82,7 +82,6 @@ qobs <- swotlists %>%
   map2(otimes, smartomit)
 
 map_int(qobs, length) == map_int(bamdatas, function(x) ncol(x$Wobs))
-
 ```
 
 ### Estimate

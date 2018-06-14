@@ -1,0 +1,207 @@
+---
+title: "notebook20180612"
+author: "Mark Hagemann"
+date: "June 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I'm ready to check the Pepsi 1 cases using the new bamr version. It seems reasonable to use the following for starters:
+
+- sigma_man = 0.1
+- logA0_sd = 0.5
+- meas_error= TRUE
+- reparam = TRUE
+- iter = 2000
+- adapt_delta = 0.95
+
+Again, load the data
+
+```{r}
+library(rstan)
+library(bamr)
+swotlists <- reachdata[1:15] # Omit StLaw, Tanana, Wabash
+qhats <- Qhats[names(swotlists)] %>% 
+  map(~.[1])
+bamdatas <- map2(swotlists, qhats, ~bam_data(.x$W, .x$S, .x$dA, .y))
+otimes <- map(bamdatas, ~.$omitTimes)
+
+smartomit <- function(qvec, omit) {
+  if (length(omit) == 0) {
+    return(qvec)
+  } else {
+    return(qvec[-omit])
+  }
+}
+
+qobs <- swotlists %>% 
+  map(~apply(.$Q, 2, mean)) %>% 
+  map2(otimes, smartomit)
+
+bampriors <- map(bamdatas, ~bam_priors(., sigma_man = 0.1))
+```
+
+Runs!
+
+```{r}
+runs1 <- list()
+
+for (i in 1:length(bamdatas)) {
+  runs1[[i]] <- bam_estimate(bamdata = bamdatas[[i]], 
+                             bampriors = bampriors[[i]], variant = "manning", 
+                             meas_error = TRUE, cores = 3, chains = 3, 
+                             iter = 2000, reparam = TRUE)
+}
+
+rhats <- map(runs1, ~check_rhat(., plot = FALSE))
+
+map(rhats, as.data.frame) %>% 
+  bind_rows(.id = "case") %>% 
+  group_by(case) %>% 
+  summarize(maxrhat = max(stat))
+
+```
+
+Problematic cases are 1, 11, 13. Also check hmc diagnostics.
+
+```{r}
+i <- i + 1
+print(i)
+check_hmc_diagnostics(runs1[[i]])
+```
+
+Problematic cases: 1, 7, 8, 13
+
+So 11 must be a marginal case. 
+
+```{r}
+stan_trace(runs1[[11]], "A0")
+stan_trace(runs1[[11]], pars = c("logn", "logQbar", "sigma_logQ"))
+```
+
+11 just needs more samples. 
+
+```{r}
+i <- 11
+runs1[[i]] <- bam_estimate(bamdata = bamdatas[[i]], 
+                             bampriors = bampriors[[i]], variant = "manning", 
+                             meas_error = TRUE, cores = 3, chains = 3, 
+                             iter = 10000, warmup = 8000, reparam = TRUE)
+
+check_rhat(runs1[[11]])
+
+stan_trace(runs1[[11]], pars = "sigma_logQ")
+```
+
+Still need to work on 1, 7, 8, 13
+
+```{r}
+check_rhat(runs1[[1]])
+stan_trace(runs1[[1]], "A0")
+stan_trace(runs1[[1]], c("logn", "sigma_logQ", "logQbar"))
+pairs(runs1[[1]], c("logn", "sigma_logQ", "logQbar"))
+plot_DAWG(bamdatas[[1]]$Sobs)
+
+runs1[[1]] <- bam_estimate(bamdata = bamdatas[[1]], variant = "manning", 
+                           bampriors = bam_priors(bamdatas[[1]], sigma_man = 0.2,
+                                                  logA0_sd = 0.1),
+                           meas_error = TRUE,
+                           reparam = TRUE, iter = 10000, warmup = 8000)
+
+plot_DAWG(bamdatas[[1]]$dAobs %>% rezero_dA("minimum"))
+```
+
+Might just be a loss. Now work on 7, 8, 13.
+
+```{r}
+check_hmc_diagnostics(runs1[[7]])
+
+check_rhat(runs1[[7]])
+stan_trace(runs1[[7]], "A0")
+stan_trace(runs1[[7]], c("logn", "sigma_logQ", "logQbar"))
+
+runs1[[7]] <- bam_estimate(bamdata = bamdatas[[7]], variant = "manning", 
+                           bampriors = bam_priors(bamdatas[[7]], sigma_man = 0.2,
+                                                  logA0_sd = 0.1),
+                           meas_error = TRUE,
+                           reparam = TRUE, iter = 10000, warmup = 8000)
+
+bam_hydrograph(runs1[[7]])
+```
+
+```{r}
+check_hmc_diagnostics(runs1[[8]])
+
+check_rhat(runs1.8)
+stan_trace(runs1.8, "A0")
+stan_trace(runs1.8, c("logn", "sigma_logQ", "logQbar"))
+
+runs1.8 <- bam_estimate(bamdata = bamdatas[[8]], variant = "manning", 
+                           bampriors = bam_priors(bamdatas[[8]], sigma_man = 0.2,
+                                                  logA0_sd = 0.1),
+                           meas_error = TRUE,
+                           reparam = TRUE, iter = 10000, warmup = 8000)
+bam_hydrograph(runs1.8)
+
+runs1[[8]] <- runs1.8
+```
+
+Last one!
+
+```{r}
+check_hmc_diagnostics(runs1[[13]])
+
+check_rhat(runs1[[13]])
+stan_trace(runs1[[13]], "A0")
+stan_trace(runs1[[13]], c("logn", "sigma_logQ", "logQbar"))
+
+runs1[[13]] <- bam_estimate(bamdata = bamdatas[[13]], variant = "manning", 
+                           bampriors = bam_priors(bamdatas[[13]], sigma_man = 0.1,
+                                                  logA0_sd = 0.1),
+                           meas_error = TRUE,
+                           reparam = TRUE, iter = 10000, warmup = 8000)
+
+bam_hydrograph(runs1[[13]])
+bam_hydrograph(runs1[[10]])
+stan_trace(runs1[[10]], c("logn", "sigma_logQ", "logQbar"))
+```
+
+
+That should do it!
+
+Time to validate.
+
+```{r}
+vals1 <- list()
+
+for (i in 1:length(runs1)) {
+  vals1[[i]] <- bam_validate(runs1[[i]], qobs[[i]])
+}
+
+vals1 %>% 
+  setNames(names(bamdatas)) %>% 
+  map(~.[["stats"]]) %>%
+  map(~as.data.frame(as.list(.))) %>% 
+  bind_rows(.id = "case")
+
+vals1 %>% 
+  setNames(names(bamdatas)) %>% 
+  map(~.[["valdata"]]) %>%
+  bind_rows(.id = "case") %>% 
+  glimpse() %>% 
+  ggplot(aes(x = qobs, y = qpred)) +
+  geom_point(aes(color = case)) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_abline(intercept = 0, slope = 1)
+```
+
+That's no good. Retry with a fixed sigma_logQ.
+
+```{r}
+
+```
+

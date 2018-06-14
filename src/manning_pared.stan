@@ -40,14 +40,15 @@ model {
   // Likelihood
   for (i in 1:ns) {
     x[i] ~ normal(z[i], truesigma_err); //already scaled by sigma_err
-    
+    // x[i] ~ normal(z[i], 0.25); //already scaled by sigma_err
+        
     // prior on A0
     A0[i] + dA_shift[i] ~ lognormal(logA0_hat, logA0_sd);
   }
   
   // Priors
-  truesigma_err ~ normal(0, 1);
+  truesigma_err ~ normal(0, sigma_err);
   y ~ normal(mu, sigma_y);
-  sigma_y ~ normal(0, 1);
+  sigma_y ~ normal(0.96, 0.4);
   mu ~ normal(mu_hat, mu_sd);
 }
