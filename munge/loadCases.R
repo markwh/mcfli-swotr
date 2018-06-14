@@ -3,7 +3,8 @@
 # 3/20/2018
 # Modified from various notebooks, including 20180316.Rmd
 
-pep1cases <- names(Pepsi_v2)
+load("../SWOT/cache/nc_r.RData")
+pep1cases <- names(nc_r)
 pep1ncs <- sprintf("../swotData/data/NC_files/%s.nc", pep1cases)
 
 nclists <- map(pep1ncs, nc_list) %>% 
@@ -42,16 +43,7 @@ reachdata0 <- nclists %>%
 
 # Get rid of problematic times (spinup issue?)
 reachdata0$Severn <- swot_sset(reachdata0$Severn, keeptimes = -1)
-# reachdata0$Severn$W <- reachdata0$Severn$W[, -1]
-# reachdata0$Severn$A <- reachdata0$Severn$A[, -1]
-# reachdata0$Severn$S <- reachdata0$Severn$S[, -1]
-# reachdata0$Severn$Q <- reachdata0$Severn$Q[, -1]
-
 reachdata0$Platte <- swot_sset(reachdata0$Platte, keeptimes = -1)
-# reachdata0$Platte$W <- reachdata0$Platte$W[, -1]
-# reachdata0$Platte$A <- reachdata0$Platte$A[, -1]
-# reachdata0$Platte$S <- reachdata0$Platte$S[, -1]
-# reachdata0$Platte$Q <- reachdata0$Platte$Q[, -1]
 
 reachncols <- map(reachdata0, ~ncol(.$A))
 
@@ -68,9 +60,12 @@ reachdata <- map2(reachdata0, reachdA, function(x, y) {x$dA <- y; x})
 
 Qmats <- nclists %>% 
   map(~.$Reach_Timeseries.Q[.$River_Info.gdrch, ])
+Qhats <- nclists %>% 
+  map(~.$River_Info.QWBM)
 
 cache("reachdata")
 cache("Qmats")
+cache("Qhats")
 
 
 # Cross-section data ------------------------------------------------------

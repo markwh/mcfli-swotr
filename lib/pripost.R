@@ -324,7 +324,11 @@ pripost_q <- function(bampriors, stanfit, true_Q = NULL, conf.level = 0.95) {
 }
 
 
-pripost_suite <- function(stanfit, bamdata, bampriors, swotlist, conf.level = 0.95) { 
+pripost_suite <- function(stanfit, bamdata, swotlist, bampriors = NULL, conf.level = 0.95) { 
+  if (is.null(bampriors)) {
+    bampriors <- bam_priors(bamdata)
+  }
+  
   swotlist$dA <- rezero_dA(swotlist$dA, "minimum")
   real_A0 <- realA0(swotlist)
   real_logn <- mean(manning_closure(swotlist, log = TRUE, mc = TRUE), na.rm = TRUE)
