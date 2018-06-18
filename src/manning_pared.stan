@@ -23,7 +23,7 @@ data {
 parameters {
   vector[nt] y;
   real<lower=0> sigma_y;
-  real mu;
+  real mu_y;
   real<lower=0> A0[ns];
   real<lower=0> truesigma_err;
 }
@@ -48,7 +48,8 @@ model {
   
   // Priors
   truesigma_err ~ normal(0, sigma_err);
-  y ~ normal(mu, sigma_y);
+  y ~ normal(mu_y, sigma_y);
   sigma_y ~ normal(0.96, 0.4);
-  mu ~ normal(mu_hat, mu_sd);
+  mu_y ~ normal(mu_hat, mu_sd);
+  
 }
