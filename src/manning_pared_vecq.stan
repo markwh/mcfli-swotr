@@ -20,6 +20,14 @@ data {
   real<lower=0> logA0_sd;
 }
 
+transformed data {
+  vector[nt] muhat_vec;
+  
+  for (t in 1:nt) {
+    muhat_vec[t] = mu_hat;
+  }
+}
+
 parameters {
   vector[nt] y;
   real<lower=0> sigma_y;
@@ -43,12 +51,12 @@ model {
     // x[i] ~ normal(z[i], 0.25); //already scaled by sigma_err
         
     // prior on A0
-    A0[i] + dA_shift[i] ~ lognormal(logA0_hat[i], logA0_sd);
+    A0[i] + dA_shift[i] ~ lognormal(logA0_hat, logA0_sd);
   }
   
   // Priors
   truesigma_err ~ normal(0, sigma_err);
   y ~ normal(mu, sigma_y);
   sigma_y ~ normal(0.96, 0.4);
-  mu ~ normal(mu_hat, mu_sd);
+  mu ~ normal(muhat_vec, mu_sd);
 }

@@ -210,7 +210,7 @@ paresamps1 <- baminps$Po %>%
 get_posterior_mean(paresamps1, pars = "A0")
 stan_trace(paresamps1, pars = "A0")
 get_posterior_mean(paresamps1, pars = c("truesigma_err", "sigma_y"))
-pairs(paresamps1, pars = c("truesigma_err", "sigma_y", "mu"))
+pairs(paresamps1, pars = c("truesigma_err", "sigma_y", "mu", "A0[1]", "A0[2]"))
 check_hmc_diagnostics(paresamps1)
 check_rhat(paresamps1)
 

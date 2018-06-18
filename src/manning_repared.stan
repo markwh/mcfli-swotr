@@ -20,19 +20,42 @@ data {
   real<lower=0> logA0_sd;
 }
 
+transformed data {
+  vector[ns] xbari;
+  vector[ns] xbar_dev;
+  
+  for (i in 1:ns) {
+    xbari[i] = mean(x[i]);
+  }
+  xbar_dev = xbari - mean(xbari);
+}
+
+
 parameters {
   vector[nt] y;
   real<lower=0> sigma_y;
   real mu;
-  real<lower=0> A0[ns];
+  
+  real
+  
+  real<lower=0> logA0bar;
+  real<lower=0> logA0_dev[ns];
+  
   real<lower=0> truesigma_err;
+  
 }
 
 transformed parameters {
+  
   vector[nt] z[ns];
-
+  real logA0_med[ns];
+  
   for (i in 1:ns) {
-    z[i] = y - (5. / 3. * log(A0[i] + dA[i]));
+    logA0_med[i] = log(A0 + dA_shift);
+    
+    A0[i] = A0bar + A0dev;
+    a[i] = (5. / 3. * log(A0[i] + dA[i]))
+    z[i] = y - a[i];
   }
 }
 
@@ -40,10 +63,12 @@ model {
   // Likelihood
   for (i in 1:ns) {
     x[i] ~ normal(z[i], truesigma_err); //already scaled by sigma_err
-    // x[i] ~ normal(z[i], 0.25); //already scaled by sigma_err
-        
+    
+    logA0_dev[i] ~ normal(xbar_dev[i])
+    
     // prior on A0
-    A0[i] + dA_shift[i] ~ lognormal(logA0_hat[i], logA0_sd);
+    logA0bar ~ normal(mean(logA0_hat), logA0_sd);
+    // A0[i] + dA_shift[i] ~ lognormal(logA0_hat[i], logA0_sd);
   }
   
   // Priors

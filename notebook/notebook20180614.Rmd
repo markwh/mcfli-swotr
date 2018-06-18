@@ -1,0 +1,197 @@
+---
+title: "notebook20180614"
+author: "Mark Hagemann"
+date: "June 14, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Going with original bam files for starters. 
+
+
+
+
+```{r}
+library(batchtools)
+
+oldreg <- loadRegistry("../../SWOT/src/bam_experiments/runs3/reg_reach_manning")
+
+getJobStatus(1:20, oldreg)
+
+```
+
+So in order to use the model from the paper I'd need to go to bamr version 0.0.12. 
+
+- Commit: be5e9375c42d65890bf503b32619884c11c4ffe1
+
+I could go back further to original files in SWOT/src/defunct.
+
+```{r}
+oldreslist <- map(1:19, ~loadResult(id = ., reg = oldreg))
+
+oldreslist[[1]] %>% 
+  get_posterior_mean() %>% 
+  rownames()
+
+
+pairs(oldreslist[[2]], pars = c("logQ[1]", "logn", "A0[1]", "A0[2]"))
+```
+
+Trying to reproduce these tighter distributions using vectorized qhat.
+
+```{r}
+paremod <- stan_model("../src/manning_pared.stan")
+paremod_vec <- stan_model("../src/manning_pared_vecq.stan")
+
+
+paresamps1 <- baminps$Po %>% 
+  pare_baminps() %>% 
+  sampling(paremod, data = ., chains = 3, cores = 3, iter = 2000)
+
+paresamps2 <- baminps$Po %>% 
+  pare_baminps() %>% 
+  sampling(paremod_vec, data = ., chains = 3, cores = 3, iter = 2000)
+
+paresamps3 <- baminps$Po %>% 
+  within(., {logA0_sd = 0.1}) %>% 
+  pare_baminps() %>% 
+  sampling(paremod_vec, data = ., chains = 3, cores = 3, iter = 2000)
+
+```
+
+
+
+```{r}
+
+get_posterior_mean(paresamps1, pars = "A0")
+stan_trace(paresamps1, pars = "A0")
+get_posterior_mean(paresamps1, pars = c("truesigma_err", "sigma_y"))
+pairs(paresamps1, pars = c("truesigma_err", "sigma_y", "mu", "A0[1]", "A0[2]"))
+check_hmc_diagnostics(paresamps1)
+check_rhat(paresamps1)
+
+get_posterior_mean(paresamps2, pars = "A0")
+stan_trace(paresamps2, pars = "A0")
+get_posterior_mean(paresamps2, pars = c("truesigma_err", "sigma_y"))
+pairs(paresamps2, pars = c("truesigma_err", "sigma_y", "mu", "A0[1]", "A0[2]"))
+check_hmc_diagnostics(paresamps2)
+check_rhat(paresamps2)
+
+get_posterior_mean(paresamps3, pars = "A0")
+stan_trace(paresamps3, pars = "A0")
+get_posterior_mean(paresamps3, pars = c("truesigma_err", "sigma_y"))
+pairs(paresamps3, pars = c("truesigma_err", "sigma_y", "mu", "A0[1]", "A0[2]"))
+check_hmc_diagnostics(paresamps3)
+check_rhat(paresamps3)
+```
+
+Verily, it does impact the tightness of the posterior. 
+
+
+I'm now wondering whether I get the same correlation structure in my matrix version. 
+
+```{r}
+lmmod <- stan_model("../stan/A0_v2-1.stan")
+
+lminps0 <- baminps$Po %>% 
+  within(., {logA0_sd = 0.1})
+
+omg <- make_omegas(lminps0$nx) %>% 
+  as.data.frame()
+lminps <- within(lminps0, {
+  x = 1:nx
+  omega = t(omg)
+  dA = t(dAobs)
+  W = t(Wobs)
+  S = t(Sobs)
+  logA0_hat = mean(logA0_hat)
+  sigma_logA0 = logA0_sd
+  sigma_err = 0.1 * (max(dA) - min(dA))
+})
+
+lmopt1 <- optimizing(lmmod, lminps, as_vector = FALSE)
+lmopt1$par$A0
+
+lmsamps <- sampling(lmmod, lminps, cores = 3, chains = 3, iter = 2000)
+check_hmc_diagnostics(lmsamps)
+
+get_posterior_mean(lmsamps)
+pairs(lmsamps, pars = c("A0[1]", "A0[2]", "A0[3]", "truesigma_err"))
+```
+
+Does sampling work if I substantially loosen the prior on A0?
+
+```{r}
+lminps2 <- within(lminps0, {
+  x = 1:nx
+  omega = t(omg)
+  dA = t(dAobs)
+  W = t(Wobs)
+  S = t(Sobs)
+  logA0_hat = mean(logA0_hat)
+  sigma_logA0 = 2
+  sigma_err = 0.1 * (max(dA) - min(dA))
+})
+
+lmopt2 <- optimizing(lmmod, lminps2, as_vector = FALSE)
+lmopt2$par$A0
+
+lmsamps2 <- sampling(lmmod, lminps2, cores = 3, chains = 3, iter = 2000)
+check_hmc_diagnostics(lmsamps)
+
+check_rhat(lmsamps2)
+get_posterior_mean(lmsamps2)
+stan_trace(lmsamps2, "A0")
+
+stan_ess(lmsamps2)
+pairs(lmsamps2, pars = c("A0[1]", "A0[2]", "A0[3]", "truesigma_err"))
+```
+
+```{r}
+stan_trace(lmsamps, c("A0[1]", "A0[2]", "truesigma_err", "lp__"), inc_warmup = TRUE)
+stan_trace(lmsamps2, c("A0[1]", "A0[2]", "truesigma_err", "lp__"), inc_warmup = TRUE)
+# cache("lmsamps")
+# cache("lmsamps2")
+```
+
+
+Is this working right? Check using sscase.
+
+```{r}
+ssinp <- within(sscase, {
+  nt = ncol(W)
+  nx = nrow(W)
+  x = x[, 1]
+  omega = t(as.data.frame(make_omegas(nx)))
+  dA = t(dA)
+  W = t(W)
+  S = t(S)
+  logA0_hat = log(500)
+  sigma_logA0 = 2
+  sigma_err = 0.1 * (max(dA) - min(dA))
+}
+)
+
+optimizing(lmmod, ssinp)
+
+```
+
+Apparently! Can I verify log probability?
+
+```{r}
+
+```
+
+
+### Bamr previous version
+
+```{r}
+dir.create("./templib")
+devtools::install_github("markwh/bamr@be5e937", lib.loc = "./templib", local = FALSE, args = "--preclean")
+
+
+```
+
