@@ -9,7 +9,7 @@ data {
   // vector[nt] W[nx];
   // vector[nt] S[nx];
   vector[nx] x;
-  vector[nx * (nx - 1) / 2] omega[nx];
+  vector[nx] omega[nx * (nx - 1) / 2];
   
   // real dA[nt, nx];
   // real W[nt, nx];
@@ -73,6 +73,7 @@ transformed data {
 
 parameters {
   vector<lower=0>[nx] A0;
+  real<lower=0> truesigma_err;
   // vector[nt] logQn;
   // vector[nt] dgdx;
   // real alpha[nx];
@@ -100,13 +101,15 @@ transformed parameters {
 
 model {
   // for (i in 1:(nx * (nx - 1) / 2)) {
-    modmat * A0 ~  normal(rhs, sigma_err);
+    modmat * A0 ~  normal(rhs, truesigma_err);
   //   lhs[i] ~ normal(rhs[i], sigma_err);
   //   
   //   target += -logA[i];
   // }
   
   A0 ~ lognormal(logA0_hat, sigma_logA0);
+  truesigma_err ~ normal(0, sigma_err);
+  
   // logQn ~ normal(logQ_hat + logn_hat, sqrt(sigma_logQ^2 + sigma_logn^2));
   // dgdx ~ normal(0, sigma_dgdx);
   // alpha ~ normal(0, sigma_alpha);

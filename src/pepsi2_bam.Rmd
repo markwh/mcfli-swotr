@@ -24,13 +24,13 @@ matrify <- function(nclist) {
   S <- nclist$s
   H <- nclist$h
   dA <- nclist$dA
-  A <- nclist$
-  
+  A <- nclist$A
   
   time <- nclist$t
 }
 
-pep2nc <- map(ncfiles, ~nc_reach(file = ., good_only = TRUE)) %>% 
+pep2nc <- ncfiles %>% 
+  map(~nc_reach(file = ., good_only = TRUE)) %>% 
   setNames(ncnames)
   
 

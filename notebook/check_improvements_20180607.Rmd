@@ -1,0 +1,79 @@
+---
+title: "check improvements"
+author: "Mark Hagemann"
+date: "June 7, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I did a bunch of runs on my laptop, since bamr is currently failing on my windows machine. Time to see how they did.
+
+```{r}
+
+load("src/ests1.RData")
+load("src/ests2.RData")
+load("src/ests3.RData")
+load("src/qobs.RData")
+load("src/bamdatas.RData")
+names(ests1)
+
+valA0 <- reachdata[names(ests1)] %>% 
+  map(function(x) {x$dA <- rezero_dA(x$dA, "minimum"); x}) %>% 
+  map(realA0)
+```
+
+```{r}
+dir.create("src/valHydrographs")
+dir.create("src/valPlots")
+
+devtools::load_all("../bamr")
+priors <- map(bamdatas, ~bam_priors(., variant = "manning_amhg"))
+```
+
+```{r}
+for (i in 1:length(ests1)) {
+  namei <- names(ests1)[i]
+  
+  ggA0 <- pripost_A0(bampriors = priors[[i]], stanfit = ests1[[i]], true_A0 = valA0[[i]]) +
+    xlim(0, 3 * max(valA0[[i]]))
+  ggsave(ggA0, filename = sprintf("src/valPlots/ests1_%s_A0.png", namei))
+  
+  valQi <- qobs[[i]]
+  
+  gghgraph <- pripost_q(bampriors = priors[[i]], stanfit = ests1[[i]], true_Q = valQi)
+  ggsave(gghgraph, filename = sprintf("src/valPlots/ests1_%s_hgraph.png", namei))
+  
+}
+
+for (i in 1:length(ests2)) {
+  namei <- names(ests2)[i]
+  
+  ggA0 <- pripost_A0(bampriors = priors[[i]], stanfit = ests2[[i]], true_A0 = valA0[[i]]) +
+    xlim(0, 3 * max(valA0[[i]]))
+  ggsave(ggA0, filename = sprintf("src/valPlots/ests2_%s_A0.png", namei))
+  
+  valQi <- qobs[[i]]
+  
+  gghgraph <- pripost_q(bampriors = priors[[i]], stanfit = ests2[[i]], true_Q = valQi)
+  ggsave(gghgraph, filename = sprintf("src/valPlots/ests2_%s_hgraph.png", namei))
+  
+}
+
+for (i in 1:length(ests3)) {
+  namei <- names(ests3)[i]
+  
+  ggA0 <- pripost_A0(bampriors = priors[[i]], stanfit = ests3[[i]], true_A0 = valA0[[i]]) +
+    xlim(0, 3 * max(valA0[[i]]))
+  ggsave(ggA0, filename = sprintf("src/valPlots/ests3_%s_A0.png", namei))
+  
+  valQi <- qobs[[i]]
+  
+  gghgraph <- pripost_q(bampriors = priors[[i]], stanfit = ests3[[i]], true_Q = valQi)
+  ggsave(gghgraph, filename = sprintf("src/valPlots/ests3_%s_hgraph.png", namei))
+  
+}
+```
+

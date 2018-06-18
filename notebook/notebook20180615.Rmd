@@ -1,0 +1,21 @@
+---
+title: "notebook20180615"
+author: "Mark Hagemann"
+date: "June 15, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+After doing some reading last night about optimizing stan code (ch. 28 of Stan manual), I think it's time to apply this to BAM models. I'll start with the pared model. I think the problem is high condition number of Hessian matrix in much of the parameter space. In my case this happens with the A0's, which are highly correlated with one another. Better if I can replace with a single global A0 and deviates therefrom. 
+
+I'll work on a version of the pared model, call it manning_repared.
+
+```{r}
+library(rstan)
+paredmod <- stan_model("../src/manning_pared.stan")
+reparedmod <- stan_model("../src/manning_repared.stan")
+```
+
