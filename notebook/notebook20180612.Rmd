@@ -202,6 +202,49 @@ vals1 %>%
 That's no good. Retry with a fixed sigma_logQ.
 
 ```{r}
+newmod <- stan_model("../../bamr/exec/manning_nolatent.stan")
+
+runs2 <- list()
+
+for (i in 1:length(bamdatas)) {
+  runs2[[i]] <- bam_estimate(bamdata = bamdatas[[i]], 
+                             bampriors = bampriors[[i]], variant = "manning", 
+                             meas_error = TRUE, cores = 3, chains = 3, 
+                             pars = c("logQtn", "man_lhs", "man_rhs"),
+                             include = FALSE, stanmodel = newmod,
+                             iter = 2000, reparam = TRUE, 
+                             control = list(adapt_delta = 0.99,
+                                            max_treedepth = 12))
+}
+
+rhats <- map(runs2, ~check_rhat(., plot = FALSE))
+
+map(rhats, as.data.frame) %>% 
+  bind_rows(.id = "case") %>% 
+  group_by(case) %>% 
+  summarize(maxrhat = max(stat, na.rm = TRUE))
 
 ```
+
+This isn't working. See what happens with the pared model.
+
+```{r}
+baminps <- list()
+
+for (i in 1:length(bamdatas)) {
+  baminps[[i]] <- bamr:::compose_bam_inputs(bamdatas[[i]], bampriors[[i]])
+}
+
+paredinps <- map(baminps, pare_baminps)
+
+paremod <- stan_model("../src/manning_pared.stan")
+
+foo <- sampling(paremod, data = paredinps[[2]], chains = 3, cores = 3,
+                control = list(adapt_delta = 0.99), iter = 10000)
+
+check_hmc_diagnostics(foo)
+check_rhat(foo)
+```
+
+
 
