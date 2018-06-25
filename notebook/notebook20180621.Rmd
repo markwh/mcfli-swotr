@@ -1,0 +1,98 @@
+---
+title: "notebook20180621"
+author: "Mark Hagemann"
+date: "June 21, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Wrapping up poster. Can I show that repared (version 3?) model improves A0 estimates for uscase?
+
+```{r}
+usinps <- with(uscase, list(
+  ns = nrow(W),
+  nt = ncol(W),
+  x = 1/2 * log(S) - 2/3 * log(W),
+  dA = rezero_dA(dA, "minimum"),
+  dA_shift = apply(dA, 1, function(x) median(x) - min(x)),
+  dist_km = x[, 1] / 1000,
+  sigma_err = 0.1,
+  mu_hat = log(300) + log(0.03),
+  mu_sd = 2,
+  logA0_hat = log(c(200, 300, 200)),
+  logA0_sd = 2
+))
+
+
+
+```
+
+
+
+```{r}
+paremod3 <- stan_model("../src/manning_repared3.stan")
+
+usoptim <- optimizing(paremod3, usinps, as_vector = FALSE)
+usoptim$par$A0
+
+ussamp <- sampling(paremod3, usinps, cores = 3, chains = 3, control = list(max_treedepth = 15))
+
+stan_trace(ussamp, pars = "A0")
+pairs(ussamp, pars = "A0")
+
+stan_trace(ussamp, pars = c("truesigma_err", "sigma_y", "sigma_dgdx", "sigma_nubar", "nubar", "mu_y"))
+
+stan_ess(ussamp)
+
+characterize_closure(within(uscase, {x = x / 1000}), method = "anova")
+```
+
+```{r}
+paremod4 <- stan_model("../src/manning_repared4.stan")
+
+ussamp4 <- sampling(paremod4, usinps, cores = 3, chains = 3, control = list(max_treedepth = 15),
+                    pars = "z", include = FALSE)
+
+stan_trace(ussamp4, pars = "A0")
+pairs(ussamp4, pars = "A0")
+
+stan_trace(ussamp4, pars = c("truesigma_err", "sigma_y", "sigma_dgdx", "mu_y"))
+stan_trace(ussamp4, "lp__", inc_warmup = TRUE)
+
+stan_ess(ussamp4)
+
+characterize_closure(within(uscase4, {x = x / 1000}), method = "anova")
+```
+
+Maybe it's just this extreme case where this doesn't work. Try on some Pepsi 1 cases.
+
+```{r}
+
+pare_baminps <- function(baminplist) {
+  out <- with(baminplist, list(
+    ns = nx,
+    nt = nt,
+    x = 1/2 * log(Sobs) - 2/3 * log(Wobs),
+    dA = rezero_dA(dAobs, "minimum"),
+    dA_shift = dA_shift,
+    sigma_err = median(sigma_man),
+    mu_hat = logQ_hat + logn_hat,
+    mu_sd = sqrt(logQ_sd^2 + logn_sd^2),
+    logA0_hat = logA0_hat,
+    logA0_sd = logA0_sd
+  ))
+  out
+}
+
+poinps <- bamdatas$Po %>% 
+  bamr:::compose_bam_inputs(priors = bam_priors(., logA0_sd = 0.5)) %>% 
+  pare_baminps()
+
+posamp4 <- sampling(paremod4, poinps, cores = 3, chains = 3, 
+                    control = list(max_treedepth = 15),
+                    pars = "z", include = FALSE)
+```
+

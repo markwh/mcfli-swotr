@@ -69,6 +69,9 @@ transformed data {
   }
   
   // print(modmat);
+  print(Mobs[1:20, 1:3])
+  print(modmat[1:20, 1:3])
+  print(rhs[1:20])
 }
 
 parameters {

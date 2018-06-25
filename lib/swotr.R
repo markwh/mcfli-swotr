@@ -16,6 +16,9 @@ swot_tidy <- function(swotlist) {
   out <- as.data.frame(outvecs)
   out$time <- times
   out$loc <- locs
+  
+  attr(out, "QWBM") <- attr(swotlist, "QWBM")
+  
   out
 }
 
@@ -38,6 +41,9 @@ swot_sset <- function(swotlist, keeptimes = 0L, keeplocs = 0L) {
     keeplocs <- 1:nr
   
   out <- lapply(swotlist, `[`, keeplocs, keeptimes)
+  
+  attr(out, "QWBM") <- attr(swotlist, "QWBM")
+  
   out
 }
 
@@ -58,6 +64,9 @@ swot_untidy <- function(swotdf) {
   swotdf <- arrange(swotdf, time, loc)
   out <- map(swotdf[matnames], 
              ~matrix(., nrow = nr, ncol = nc, byrow = FALSE))
+  
+  attr(out, "QWBM") <- attr(swotdf, "QWBM")
+  
   out
 }
 
@@ -100,7 +109,9 @@ swot_timelag <- function(swotlist, lags) {
            time <= max(time) - max(abs(lag))) %>% 
     select(-lag)
   out <- swot_untidy(swotdf)
-  # browser()
+  
+  attr(out, "QWBM") <- attr(swotlist, "QWBM")
+  
   out
 }
 
@@ -147,6 +158,8 @@ ccf_lag <- function(swotlist, Ahat = TRUE, verbose = FALSE) {
   
   if (Ahat)
     out$Ahat <- A
+  
+  attr(out, "QWBM") <- attr(swotlist, "QWBM")
   
   out
 }
@@ -226,6 +239,8 @@ swot_purge_nas <- function(swotlist, purge = c("times", "locs")) {
     out <- swot_sset(swotlist, keeplocs = -unique(inddf[[1]]))
   }
   
+  attr(out, "QWBM") <- attr(swotlist, "QWBM")
+  
   out
 }
 
@@ -243,6 +258,7 @@ swot_plot <- function(swotlist, vars = "all"){
     geom_line() +
     geom_point() +
     facet_wrap(~variable, scales = "free_y")
+  
   out
 }
 
@@ -289,6 +305,22 @@ nc_reach <- function (file, good_only = FALSE) {
               H = H[inbounds, ], 
               t = swot_vec2mat(t, ptrn), x = swot_vec2mat(x, ptrn),
               reachid = swot_vec2mat(inbounds, ptrn), Q = Q[inbounds, ], 
-              A = A[inbounds, ], QWBM = QWBM)
+              A = A[inbounds, ])
+  attr(out, "QWBM") <- QWBM
   out
+}
+
+
+swot_bamdata <- function(swotlist, QWBM = NULL) {
+  if (!requireNamespace("bamr", quietly = TRUE)) {
+    stop("The bamr package is needed for this function to work. Please install it.", 
+         call. = FALSE)
+  } 
+  
+  if (is.null(QWBM)) {
+    qhat <- attr(swotlist, "QWBM")
+  }
+  
+  bd <- bamr::bam_data(w = swotlist$W, s = swotlist$S, dA = swotlist$dA)
+  
 }

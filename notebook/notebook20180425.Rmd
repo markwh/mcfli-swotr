@@ -129,7 +129,7 @@ Now I can do all kinds of crazy experiments!
 
 
 ```{r}
-
+set.seed(26348)
 bs <- 20 * 1e-5
 n <- 0.04
 bws <- runif(10, 100, 200)
@@ -148,7 +148,47 @@ resps <- map(rfuns, function(x) x(Qs)) %>%
 
 resp_swot <- swot_untidy(resps)
 
-swot_plot(resp_swot)
+gg1 <- swot_plot(resp_swot) +
+  theme_bw()
+ggsave("../graphs/poster/widthonly1.png", plot = gg1, width = 4, height = 3, dpi = 500)
+```
+
+Simulate error and observe A0 error. 
+
+```{r}
+add_dAerror <- function(swotlist, sd_frac) {
+  dA0 <- swotlist$dA
+  sd0 <- mean(apply(dA0, 1, sd))
+  swotlist$dA <- dA0 + rnorm(nrow(dA0) * ncol(dA0), 0, sd_frac * sd0)
+  swotlist
+}
+
+errfracs <- rep(1:10 / 200, each = 300)
+simerrlists <- map(errfracs, ~add_dAerror(resp_swot, .)) %>% 
+  map(~suppressMessages(estA0(.)))
+
+realA0df <- as.data.frame(as.list(realA0(resp_swot))) %>% 
+  setNames(paste0("x", 1:ncol(.))) %>% 
+  gather(key = "loc", value = "realA0")
+  
+
+errsimdf <- simerrlists %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  map2(errfracs, ~mutate(.x, err_frac = .y)) %>% 
+  bind_rows() %>% 
+  gather(key = "loc", value = "A0est", -err_frac) %>% 
+  left_join(realA0df, by = "loc") %>% 
+  mutate(relerr = (A0est - realA0) / realA0 * 100) 
+
+gg6 <- ggplot(errsimdf, aes(x = err_frac * 100, y = relerr)) +
+  geom_point(position = position_jitter(), size = 0.2, alpha = 0.2) + 
+  theme_bw() +
+  ylab("Relative A0 error, percent") +
+  xlab("Relative dA error, percent") +
+  scale_x_continuous(breaks = 1:10)
+
+ggsave("../graphs/poster/widthonly2.png", width = 4, height = 3, dpi = 500)
+
 ```
 
 

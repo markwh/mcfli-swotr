@@ -128,13 +128,47 @@ Let's look at a ribbon for anovas.
 anova1df <- c(reachdata, list(sscase = sscase, uscase = uscase)) %>% 
   map(swot_purge_nas) %>% 
   map(possibly(closure_anova, otherwise = data.frame())) %>% 
-  bind_rows(.id = "case")
+  bind_rows(.id = "case") %>% 
+  mutate(piece = plyr::mapvalues(piece, from = c("nuhat", "gammahat"), 
+                                 to = c("nu", "gamma")),
+         piece = factor(piece, levels = c("resid", "nu", "gamma")))
 
-anova1df %>% 
+gg1 <- anova1df %>% 
   ggplot(aes(x = case, y = pctTotVar, fill = piece)) +
   geom_bar(stat = "identity", position = "stack") +
-  theme(axis.text = element_text(angle = 90)) +
-  xlab("")
+  # theme(axis.text = element_text(angle = 90, hjust = 1)) +
+  xlab("") +
+  ylab("% Total Closure Variance") +
+  coord_flip() +
+  # theme_bw() + 
+  theme_minimal() +
+  guides(fill = guide_legend(title = element_blank(), reverse = TRUE)) +
+  theme(legend.position = "bottom")
+
+ggsave("../graphs/poster/clos_anova.png", width = 4, height = 4, dpi = 500)
+
+```
+
+
+
+
+An example of closure decomposition
+
+```{r}
+clos1 <- manning_closure(uscase, log = TRUE)
+clos_gam <- decomp_gamma(manning_gamma(uscase, log = TRUE), xmat = uscase$x)
+clos_nu <- decomp_nu(manning_nu(uscase, log = TRUE))
+clos_n <- mean(clos1)
+clos_resid <- clos1 - clos_n - clos_gam$gammahat - clos_nu$nuhat
+
+gg2 <- plot_DAWG(clos1) + theme_bw() + ylab("log(closure term)")
+gg3 <- plot_DAWG(clos_gam$gammahat) + theme_bw() + ylab("flow imbalance as fraction (gamma)")
+gg4 <- plot_DAWG(clos_nu$nuhat) + theme_bw() + ylab("n difference as fraction")
+gg5 <- plot_DAWG(clos_resid) + theme_bw() + ylab("residual closure as fraction")
+
+ggsave("../graphs/poster/gamma.png", gg3, width = 4, height = 3, dpi = 500)
+ggsave("../graphs/poster/nu.png", gg4, width = 4, height = 3, dpi = 500)
+ggsave("../graphs/poster/resid.png", gg5, width = 4, height = 3, dpi = 500)
 
 ```
 

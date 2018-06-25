@@ -1,0 +1,307 @@
+---
+title: "notebook20180618"
+author: "Mark Hagemann"
+date: "June 18, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I have a few todo items. But right now I'm curious as to how much adding a hierarchical structure to A0 can improve speed and convergence issues. 
+
+Working with Bayesian linear model from Thursday (0614). (Created a while before that but most recent insights and gripes were Thursday). 
+
+```{r}
+library(bamr)
+swotlists <- reachdata[1:15] # Omit StLaw, Tanana, Wabash
+qhats <- Qhats[names(swotlists)] %>% 
+  map(~.[1])
+bamdatas <- map2(swotlists, qhats, ~bam_data(.x$W, .x$S, .x$dA, .y))
+otimes <- map(bamdatas, ~.$omitTimes)
+
+smartomit <- function(qvec, omit) {
+  if (length(omit) == 0) {
+    return(qvec)
+  } else {
+    return(qvec[-omit])
+  }
+}
+
+qobs <- swotlists %>% 
+  map(~apply(.$Q, 2, mean)) %>% 
+  map2(otimes, smartomit)
+
+baminps <- map(bamdatas, bamr:::compose_bam_inputs)
+```
+
+
+```{r}
+library(rstan)
+
+lmmod1 <- stan_model("../stan/A0_v2-1.stan")
+lmmod2 <- stan_model("../stan/A0_v2-1-1.stan")
+
+lminps0 <- baminps$Po %>% 
+  within(., {logA0_sd = 0.1})
+
+omg <- make_omegas(lminps0$nx) %>% 
+  as.data.frame()
+lminps <- within(lminps0, {
+  x = 1:nx
+  omega = t(omg)
+  dA = t(dAobs)
+  W = t(Wobs)
+  S = t(Sobs)
+  logA0_hat = mean(logA0_hat)
+  sigma_logA0 = logA0_sd
+  sigma_err = 0.1 * (max(dA) - min(dA))
+})
+```
+
+
+```{r}
+lmopt1 <- optimizing(lmmod1, lminps, as_vector = FALSE)
+lmopt1$par$A0
+
+lmopt2 <- optimizing(lmmod2, lminps, as_vector = FALSE)
+lmopt2$par$A0
+
+
+lmsamps1 <- sampling(lmmod1, lminps, cores = 3, chains = 3, iter = 2000) # 433 sec
+check_hmc_diagnostics(lmsamps1)
+
+lmsamps2 <- sampling(lmmod2, lminps, cores = 3, chains = 3, iter = 2000) # 297 sec
+check_hmc_diagnostics(lmsamps2)
+
+get_posterior_mean(lmsamps1)
+get_posterior_mean(lmsamps2)
+pairs(lmsamps1, pars = c("A0[1]", "A0[2]", "A0[3]", "truesigma_err"))
+pairs(lmsamps2, pars = c("A0[1]", "A0[2]", "A0[3]", "mu_logA0", "truesigma_err"))
+
+```
+
+This is really puzzling. Model must be misspecified. Make a new set of models that take the model matrix as input. OK, that's in A0_v2-1-lm.stan.
+
+```{r}
+lmmod_matinp <- stan_model("../stan/A0_v2-1-lm.stan")
+A0lmmat <- estA0_lm(reachdata$Po)$model
+
+lminplist <- list(nrow = nrow(A0lmmat),
+                  nx = ncol(A0lmmat) - 1,
+                  rhs = A0lmmat[, 1],
+                  modmat = A0lmmat[, -1],
+                  logA0_hat = lminps$logA0_hat,
+                  sigma_logA0 = lminps$sigma_logA0,
+                  sigma_err = lminps$sigma_err)
+
+matopts <- optimizing(lmmod_matinp, data = lminplist, as_vector = FALSE)
+matopts$par$A0
+
+matsamps <- sampling(lmmod_matinp, data = lminplist, cores = 3, chains = 3) # 671 secs
+
+```
+
+Now repeat with hierarchical structure.
+
+
+```{r}
+lmmod_matinp2 <- stan_model("../stan/A0_v2-1-lm2.stan")
+
+matopts2 <- optimizing(lmmod_matinp2, data = lminplist, as_vector = FALSE)
+matopts2$par$A0
+
+matsamps2 <- sampling(lmmod_matinp2, data = lminplist, cores = 3, chains = 3) #856 secs. Not faster.
+
+```
+
+
+Check results.
+
+```{r}
+stan_trace(matsamps, "A0")
+pairs(matsamps, pars = c("A0[1]", "A0[2]", "A0[3]", "truesigma_err"))
+pairs(matsamps2, pars = c("A0[1]", "A0[2]", "A0[3]", "mu_logA0", "truesigma_err"))
+```
+
+From all spot checks, the different lm-like stan models should be identical.  
+
+Next I need to put the new pared model to the test. To refresh, the order of operations here is:
+
+- Create bam inputs via bamr:::compose_bam_inputs
+- pare this via pare_baminps (0611 notebook and elsewhere)
+- Run model
+
+```{r}
+pareinps <- baminps$Po %>% 
+  pare_baminps()
+
+paremod1 <- stan_model("../src/manning_pared.stan")
+paremod2 <- stan_model("../src/manning_repared2.stan")
+
+pareopts1 <- optimizing(paremod1, pareinps, as_vector = FALSE)
+pareopts2 <- optimizing(paremod2, pareinps, as_vector = FALSE)
+
+pareopts1$par$A0
+pareopts2$par$A0
+
+plot(pareopts1$par$A0, pareopts2$par$A0)
+
+paresamps1 <- sampling(paremod1, pareinps, cores = 3, chains = 3)
+paresamps2 <- sampling(paremod2, pareinps, cores = 3, chains = 3)
+
+```
+
+
+```{r}
+pairs(paresamps1, pars = c("A0[1]", "A0[2]", "A0[3]", "truesigma_err"))
+pairs(paresamps2, pars = c("A0[1]", "A0[2]", "A0[3]", "mu_a", "truesigma_err", "sigma_y"))
+stan_trace(paresamps2, pars = c("A0[1]", "A0[2]", "A0[3]", "mu_a", "truesigma_err", "sigma_y"),
+           inc_warmup = TRUE)
+```
+
+This is pointing to model misspecification. What's going on? Can I show that the model structure is correct?
+
+Make a function to characterize a swotlist in terms of pared model. 
+
+```{r}
+char_pared <- function(swotlist) {
+  x <- with(swotlist, 1/2 * log(S) - 2/3 * log(W))
+  dA <- with(swotlist, rezero_dA(dA, "minimum"))
+  dA_shift <- apply(dA, 1, function(x) median(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+  
+  logQ <- apply(log(swotlist$Q), 2, mean, na.rm = TRUE)
+  logn <- mean(manning_closure(swotlist, log = TRUE, mc = TRUE))
+  
+  y <- logQ + logn
+  z <- swot_vec2mat(y, x) - 5/3 * log(swotlist$A)
+  
+  sigma_y <- sd(y)
+  mu_y <- mean(y)
+  A0 <- (swotlist$A - dA)[, 1]
+  truesigma_err <- sd(x - z)
+  
+  out <- list(x = x, y = y, z = z, 
+              mu_y = mu_y, sigma_y = sigma_y,
+              A0 = A0, truesigma_err= truesigma_err)
+}
+
+foo <- char_pared(reachdata$Po)
+foo$z %>% plot_DAWG()
+foo$x %>% plot_DAWG()
+
+with(foo, plot_DAWG(x - z))
+```
+
+I can compare this to output from stan. 
+
+```{r}
+sampz1 <- get_posterior_mean(paresamps2, "z")[, 1] %>% 
+  matrix(ncol = pareinps$nt, byrow = TRUE)
+
+sampz3 <- get_posterior_mean(paresamps2, "z")[, 3] %>% 
+  matrix(ncol = pareinps$nt, byrow = TRUE)
+
+plot_DAWG(sampz1 - foo$x)
+plot_DAWG(sampz3 - foo$x)
+with(foo, plot_DAWG(x - z))
+
+sd(sampz1 - foo$x)
+sd(sampz3 - foo$x)
+with(foo, sd(x - z))
+```
+
+ 
+Contrast this against what you get with sscase. 
+
+```{r}
+ssparinps <- list(
+  ns = nrow(sscase$W),
+  nt = ncol(sscase$W),
+  x = with(sscase, 1/2 * log(S) - 2/3 * log(W)),
+  dA = rezero_dA(sscase$dA, "minimum"),
+  dA_shift = apply(sscase$dA, 1, function(x) median(x) - min(x)),
+  sigma_err = pareinps$sigma_err,
+  mu_hat = pareinps$mu_hat,
+  mu_sd = pareinps$mu_sd,
+  logA0_hat = rep(5, 3),
+  logA0_sd = 2
+)
+
+ssparesamps <- sampling(paremod1, ssparinps, cores = 3, chains = 3)
+
+check_hmc_diagnostics(ssparesamps)
+pairs(ssparesamps, pars = "A0")
+```
+
+```{r}
+bar <- char_pared(sscase)
+
+ssz1 <- get_posterior_mean(ssparesamps, "z")[, 4] %>% 
+  matrix(ncol = ssparinps$nt, byrow = TRUE)
+
+plot_DAWG(bar$z)
+plot_DAWG(ssz1)
+
+plot_DAWG(ssz1 - bar$x)
+with(bar, plot_DAWG(x - z))
+
+sd(ssz1 - bar$x)
+with(bar, sd(x - z)) 
+```
+ 
+Conclusion: Can't get to the solution by minimizing error--need to specify this some other way. Or put a prior on it. It serves my thesis if I can show that representing error structure is beneficial. 
+
+
+Here's a shot at adding in that canonical error structure. 
+
+```{r}
+pareinps$dist_km <- reachdata$Po$x[, 1] / 1000
+
+paremod3 <- stan_model("../src/manning_repared3.stan")
+```
+
+```{r}
+pareopts3 <- optimizing(paremod3, pareinps, as_vector = FALSE)
+pareopts3$par$A0
+
+pareopts3$par$dgdx %>% plot(type = "l")
+pareopts3$par$sigma_dgdx
+pareopts3$par$sigma_nubar
+
+pareopts3$par$z %>% 
+  matrix(nrow = 16, byrow = TRUE) %>% 
+  plot_DAWG()
+
+paresamps3 <- sampling(paremod3, pareinps, cores = 3, chains = 3) # 370 secs
+
+```
+
+
+```{r}
+pairs(paresamps3, pars = c("A0[1]", "A0[2]", "A0[3]", "truesigma_err", 
+                           "sigma_dgdx", "sigma_nubar", "sigma_y"))
+
+```
+
+```{r}
+characterize_closure(within(reachdata$Po, {x = x / 1000}), method = "anova")
+
+sd(get_posterior_mean(paresamps3, pars = "nubar"))
+get_posterior_mean(paresamps3, pars = "dgdx")[, 4] %>% plot()
+```
+
+```{r}
+sampz3 <- get_posterior_mean(paresamps3, "z")[, 4] %>% 
+  matrix(ncol = pareinps$nt, byrow = TRUE)
+
+plot_DAWG(sampz3 - foo$x)
+with(foo, plot_DAWG(x - z))
+
+sd(sampz1 - foo$x)
+sd(sampz3 - foo$x)
+with(foo, sd(x - z))
+```
+

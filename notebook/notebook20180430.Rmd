@@ -255,7 +255,7 @@ plot(cors2)
 Plot, save, send to Mike!
 
 ```{r}
-grid %>% 
+gg2 <- grid %>% 
   mutate(cor = cors2, 
          bw = as.factor(round(bw, digits = 2))) %>%
          # bw = as.factor(bw)) %>%
@@ -265,7 +265,10 @@ grid %>%
   scale_x_log10() + theme_bw() +
   guides(color = guide_legend(title = "bottom width (m)", ncol = 2)) +
   xlab("side slope") + ylab("rho")
-ggsave("../reports/sigmoid_v2.png", height = 4, units = "in")
+ggsave("../reports/sigmoid_v2.png", plot = gg2, height = 4, units = "in")
+
+ggsave("../graphs/poster/sigmoid.png", plot = gg2, height = 3, width = 4, units = "in", dpi = 500)
+
 
 ```
 

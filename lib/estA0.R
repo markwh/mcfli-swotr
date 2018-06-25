@@ -42,7 +42,7 @@ estA0_lm <- function(swotlist, zero = c("same", "first", "minimum", "median"),
   }
 
   lmout <- estA0_lm_ws35(ws35mat = ws35, dAmat = dA, xvec = xvec, 
-                         weight = !is.null(xvec), zero = zero, 
+                         weight = weight, zero = zero, 
                          random_omega = random_omega, intercept = intercept, 
                          symmetric = symmetric)
   

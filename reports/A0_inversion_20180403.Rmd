@@ -118,13 +118,29 @@ boot_df <- boot_A0 %>%
   map2(boot_condno, ~mutate(.x, condno = .y)) %>% 
   bind_rows(.id = "sampno")
 
-boot_df %>%
+gg2 <- boot_df %>%
   gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>%
   # filter(nunique > 7) %>%
   ggplot(aes(x = reach, y = A0_estimate, color = R2)) +
   geom_point(position = position_jitterdodge()) +
+  geom_violin(fill = NA) +
+  theme_bw()
   # geom_boxplot(fill = NA) +
-  scale_colour_viridis_c() 
+  # scale_colour_viridis_c() 
+
+ggsave("../graphs/poster/sscase_boot.png", plot = gg2, width = 4, height = 3, dpi = 500)
+
+gg3 <- plot_DAWG(manning_closure(sscase)) + 
+  theme_bw()
+ggsave("../graphs/poster/sscase_clos.png", plot = gg3, width = 4, height = 3, dpi = 500)
+
+gg4 <- plot_DAWG(manning_closure(uscase)) + 
+  theme_bw()
+ggsave("../graphs/poster/Uscase_clos.png", plot = gg4, width = 4, height = 3, dpi = 500)
+
+gg5 <- plot_DAWG(manning_closure(reachdata$Po)) + 
+  theme_bw()
+ggsave("../graphs/poster/po_clos.png", plot = gg5, width = 4, height = 3, dpi = 500)
 
 ```
 
@@ -230,13 +246,17 @@ boot_df <- boot_A0 %>%
   map2(boot_condno, ~mutate(.x, condno = .y)) %>% 
   bind_rows(.id = "sampno")
 
-boot_df %>%
+gg6 <- boot_df %>%
   gather(key = reach, value = A0_estimate, -sampno, -nunique, -R2, -condno) %>%
   # filter(nunique > 7) %>%
   ggplot(aes(x = reach, y = A0_estimate, color = R2)) +
   geom_point(position = position_jitterdodge()) +
+  geom_violin(fill = NA) +
   # geom_boxplot(fill = NA) +
-  scale_colour_viridis_c() 
+  # scale_colour_viridis_c() 
+  theme_bw()
+
+ggsave("../graphs/poster/uscase_boot.png", plot = gg6, width = 4, height = 3, dpi = 500)
 
 ```
 
