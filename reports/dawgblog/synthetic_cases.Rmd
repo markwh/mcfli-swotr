@@ -1,0 +1,47 @@
+---
+title: "The case for synthetic datasets"
+author: "Mark Hagemann"
+date: "June 30, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The Pepsi challenges have proven their tremendous worth as a tool for verifying McFLI performance and applicability. Part of their value relates to the difficulty by which they are assembled and the sparseness of the models on which they rely. The mismatch between supply and demand for Pepsi cases leads to a kind of desperation for any useable model-derived dataset of SWOT-observable hydrologic quantities, and a corresponding gap between our ideal set of benchmark cases and the benchmark set we have to deal with. Ideally we would like a diverse set of cases from all over the world, independent of proximity to population centers or monitoring agencies. 
+
+## Ideals versus reality 
+
+Best case:
+
+- Real-life measurements of reasonably long-term reach-averaged width, height, and slope from a hydraulically diverse set of hydrologically independent rivers around the world, with gauge-measured discharge at every reach. 
+
+Next best:
+
+- Model-derived "measurments" of the above quantities including discharge--again, reasonably long-term and from hydraulically diverse, hydrologically independent rivers around the world. 
+
+The Pepsi challenges make an attempt at doing this, but fail in that:
+
+- Many cases are only short-term daily time-series. This is important due to the long memory (high temporal autocorrelation) of hydrologic time series. A dozen or so consecutive days of hydrologic variability is likely to span only a small portion of the distribution of those quantities, and is a very non-representative sample. This is perhaps the most serious issue, in my mind, with the Pepsi challenge cases. 
+
+- Many cases are hydrologically redundant. That is, they lie upstream/downstream of one another in the same river network. Obviously the impact of this on case diversity depends on how far up/downstream the cases are from one another, and whether there are significant changes in things like discharge amount, flow regime, terrain, rheology, antrhopic impact, etc. in between the cases. Clearly there are some offenders in the Pepsi cases, particularly the multiple Ohio cases that are essentially in series with one another. 
+
+- Even some cases that do not belong to the same river network are nonetheless very similar in their geomorphic location. Pepsi 2 contains at least 3 cases from the Banladesh estuary that fit this description. 
+
+## A path forward
+
+If a globe-spanning trove of hydrodynamic model output is not discovered in the near future, we need another way of testing McFLI algorithms. As many have already suggested, synthetic rivers are one way of getting many cases quickly. Understandably, people from the hydrological modeling community have presented this idea as a hydrologic modeling effort--synthesizing entire rivers that span a set of predefined criteria (Freude number, drainage area, mean bed slope, etc.). I think that's an excellent way to go--but it's not one I am well positioned to contribute to. 
+
+From my perspective, an even simpler approach would be to generate datasets stochastically such that bare-bones hydraulics (i.e. in the form of mass-conserved Manning's equation) are represented, and realistic error correlation structure is imposed atop the "perfect" math. 
+
+The reasoning behind this idea is as follows. If an algorithm can do inversions from SWOT data, it should be able to do at least as well on in-situ data. If it inverts on in-situ, it should do at least as well on hydrodynamic model-generated data. If it inverts on hydrodynamic model data, it should do at least as well on mathematically correct data. 
+
+
+I have a function to do simulate mass-conserved Manning data, but it is extremely limited in what it can represent in terms of case-specific nuances. 
+
+```{r}
+
+```
+
+

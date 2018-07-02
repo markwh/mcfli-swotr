@@ -1,0 +1,36 @@
+---
+title: "notebook20180627"
+author: "Mark Hagemann"
+date: "June 27, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I'm going to try out using google compute engine and docker to run stan models. 
+
+Following [this guide](https://cloudyr.github.io/googleComputeEngineR/articles/massive-parallel.html)
+
+
+```{r}
+library(future)
+library(googleComputeEngineR)
+
+gce_get_project()
+
+vm_names <- c("vm1", "vm2", "vm3")
+
+my_docker <- gce_tag_container("rstan-image", project = "testproject1-179318")
+
+
+jobs <- lapply(vm_names, function(x) {
+  gce_vm_template(template = "dynamic", predefined_type = "n1-higmem-2", 
+                  name = x,
+                  dynamic_image = my_docker, wait = FALSE)
+})
+
+vms <- lapply(vm_names, gce_wait)
+```
+

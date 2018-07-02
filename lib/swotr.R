@@ -273,6 +273,24 @@ plot_DAWG <- function (dawgmat) {
     scale_color_gradient()
 }
 
+#' Read a netcdf file to a list.
+#'
+#' @param file string providing the location of a netcdf file.
+#' @export
+nc_list <- function(file) {
+  if (!requireNamespace("ncdf4", quietly = TRUE)) {
+    stop("The ncdf4 package is needed for this function to work. Please install it.",
+         call. = FALSE)
+  }
+  nc <- ncdf4::nc_open(file)
+  on.exit(ncdf4::nc_close(nc))
+  
+  vars <- names(nc$var)
+  
+  out <- setNames(lapply(vars, ncdf4::ncvar_get, nc = nc), make.names(vars))
+  out
+}
+
 nc_reach <- function (file, good_only = FALSE) {
   if (!requireNamespace("ncdf4", quietly = TRUE)) {
     stop("The ncdf4 package is needed for this function to work. Please install it.", 
@@ -286,7 +304,7 @@ nc_reach <- function (file, good_only = FALSE) {
   S <- nclist$Reach_Timeseries.S
   dA <- calcdA_mat(w = W, h = H)
   A <- nclist$Reach_Timeseries.A
-  QWBM <- nclist$River_Info.QWBM
+  QWBM <- nclist$River_Info.QWBM[1]
   inbounds <- 1:nrow(W)
   if (good_only) 
     inbounds <- good_reaches
@@ -311,16 +329,28 @@ nc_reach <- function (file, good_only = FALSE) {
 }
 
 
-swot_bamdata <- function(swotlist, QWBM = NULL) {
+#' Create bamdata object from a swotlist. 
+#' 
+#' @param swotlist a list of SWOT observables
+#' @param Qhat Prior guess of mean discharge. If NULL, will attempt to get 
+#'   from \code{attr(swotlist, "QWBM")}
+#' @export
+swot_bamdata <- function(swotlist, Qhat = NULL, ...) {
   if (!requireNamespace("bamr", quietly = TRUE)) {
     stop("The bamr package is needed for this function to work. Please install it.", 
          call. = FALSE)
   } 
   
-  if (is.null(QWBM)) {
-    qhat <- attr(swotlist, "QWBM")
+  if (is.null(Qhat)) {
+    Qhat <- attr(swotlist, "QWBM")
+    if (is.null(Qhat)) {
+      stop("QWBM must be supplied if no QWBM attribute is present in swotlist.\n")
+    }
   }
   
-  bd <- bamr::bam_data(w = swotlist$W, s = swotlist$S, dA = swotlist$dA)
+  bd <- bamr::bam_data(w = swotlist$W, s = swotlist$S, dA = swotlist$dA, Qhat = Qhat, ...)
   
 }
+
+
+
