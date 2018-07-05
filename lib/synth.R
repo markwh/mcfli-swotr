@@ -1,22 +1,27 @@
 # Synthetic data
 
-synth_new <- function(nx = 20, nt = 100, mu = runif(1, 0, 10),
+
+#' Produces a new swotlist, which can then be put into a bamr or pared model. 
+synth_new <- function(nx = 20, nt = 100, mu_q = runif(1, 0, 10),
+                      sigma_q = runif(1, 0.5, 1.5),
                       noise_ar = "none", sigma_err = runif(1, 0, 0.3)) {
   
-  sigma_z <- runif(1, 0.5, 1.5)
-  
   if (noise_ar == "none") {
-    z <- rnorm(nt, mu, sigma_z)
+    logq <- rnorm(nt, mu_q, sigma_q)
   } else {
-    z <- arima.sim(model = list(ar = noise_ar), n = nt)
-    z <- (z - mean(z)) * sigma_z / sd(z) + mu
+    logq <- arima.sim(model = list(ar = noise_ar), n = nt)
+    logq <- (logq - mean(logq)) * sigma_q / sd(logq) + mu_q
   }
   
+  
   errmat <- matrix(rnorm(nx * nt, 0, sigma_err), nrow = nx)
-  lhs <- swot_vec2mat(z, errmat) + errmat
+  lhs <- swot_vec2mat(logq, errmat) + errmat
   
   mu_logA53 <- runif(nx, 5, 8)
-  logA53 <- lhs + matrix(rnorm(nx * nt, rep(mu_logA53, nt), sigma_z / 2),
+  
+  # logA should be strongly correlated with logQ.
+  
+  logA53 <- lhs + matrix(rnorm(nx * nt, rep(mu_logA53, nt), sigma_q / 2),
                          nrow = nx, byrow = FALSE)
   logx <- lhs - logA53
   
@@ -24,6 +29,8 @@ synth_new <- function(nx = 20, nt = 100, mu = runif(1, 0, 10),
   logS12 <- logx - neglogW23
   W <- exp(-3/2 * neglogW23)
   S <- exp(2 * logS12)
+  
+  Q <- swot_vec2mat(exp(logq), W)
   
   mu_logA <- mu_logA53 * 3 / 5
   logA <- 3 / 5 * logA53
@@ -33,26 +40,14 @@ synth_new <- function(nx = 20, nt = 100, mu = runif(1, 0, 10),
   dA_shift <- apply(dA, 1, function(x) median(x) - min(x))
   
   out <- list(
-    nx = nx,
-    nt = nt,
-    dAobs = dA,
-    dA_shift = dA_shift,
-    Wobs = W,
-    Sobs = S,
-    sigma_man = swot_vec2mat(rep(sigma_err, nx), dA),
-    logQ_hat = 5,
-    logQ_sd = 2,
-    logn_hat = -3.5,
-    logn_sd = 0.25,
-    logA0_hat = rnorm(nx, log(A0vec), 0.25),
-    logA0_sd = 0.25,
-    lowerbound_logQ = 1,
-    upperbound_logQ = 20,
-    lowerbound_logn = -10,
-    upperbound_logn = 10,
-    lowerbound_A0 = 0,
-    upperbound_A0 = 1e5
+    dA = dA,
+    A = exp(logA),
+    W = W,
+    S = S,
+    Q = Q
   )
+  
+  attr(out, "QWBM") <- rlnorm(1, mu_q, 1)
   
   out
 }
