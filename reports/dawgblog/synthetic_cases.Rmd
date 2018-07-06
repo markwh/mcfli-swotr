@@ -9,13 +9,15 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-The Pepsi challenges have proven their tremendous worth as a tool for verifying McFLI performance and applicability. Part of their value relates to the difficulty by which they are assembled and the sparseness of the models on which they rely. The mismatch between supply and demand for Pepsi cases leads to a kind of desperation for any useable model-derived dataset of SWOT-observable hydrologic quantities, and a corresponding gap between our ideal set of benchmark cases and the benchmark set we have to deal with. Ideally we would like a diverse set of cases from all over the world, independent of proximity to population centers or monitoring agencies. 
+The Pepsi challenges have proven their tremendous worth as a tool for verifying McFLI performance and applicability. Part of their value relates to the difficulty by which they are assembled and the sparseness of the models on which they rely. The mismatch between supply and demand for benchmark SWOT-lik cases leads to a kind of desperation for any useable model-derived dataset of SWOT-observable hydrologic quantities, and a corresponding gap between the set of benchmark cases we would like and the set we can reasonably expect to have.  
 
 ## Ideals versus reality 
 
+Ideally we would like a diverse set of cases from all over the world, independent of proximity to population centers or monitoring agencies. Here is what I could brainstorm for test case characteristics.
+
 Best case:
 
-- Real-life measurements of reasonably long-term reach-averaged width, height, and slope from a hydraulically diverse set of hydrologically independent rivers around the world, with gauge-measured discharge at every reach. 
+- Real-life measurements of reasonably long-term reach-averaged width, height, and slope from a hydraulically diverse set of hydrologically independent rivers around the world, with corresponding discharge measurements at every reach. 
 
 Next best:
 
@@ -31,17 +33,112 @@ The Pepsi challenges make an attempt at doing this, but fail in that:
 
 ## A path forward
 
-If a globe-spanning trove of hydrodynamic model output is not discovered in the near future, we need another way of testing McFLI algorithms. As many have already suggested, synthetic rivers are one way of getting many cases quickly. Understandably, people from the hydrological modeling community have presented this idea as a hydrologic modeling effort--synthesizing entire rivers that span a set of predefined criteria (Freude number, drainage area, mean bed slope, etc.). I think that's an excellent way to go--but it's not one I am well positioned to contribute to. 
+If a globe-spanning trove of hydrodynamic model output is not discovered in the near future, we need another way of testing McFLI algorithms. As many have already suggested, synthetic rivers are one way of getting many cases quickly. Understandably, people from the hydrological modeling community have presented this idea as a hydrologic modeling effort--synthesizing entire rivers that span a set of predefined criteria (Froude number, drainage area, mean bed slope, etc.). I think that's an excellent way to go--but it's not one I am well positioned to contribute to. 
 
-From my perspective, an even simpler approach would be to generate datasets stochastically such that bare-bones hydraulics (i.e. in the form of mass-conserved Manning's equation) are represented, and realistic error correlation structure is imposed atop the "perfect" math. 
+From my perspective, an even simpler approach would be to generate datasets stochastically such that bare-bones hydraulics (e.g. those given by mass-conserved Manning's equation) are represented, and realistic error correlation structure is imposed atop the "perfect" math. That is, the following equation relates the variables to one another
 
-The reasoning behind this idea is as follows. If an algorithm can do inversions from SWOT data, it should be able to do at least as well on in-situ data. If it inverts on in-situ, it should do at least as well on hydrodynamic model-generated data. If it inverts on hydrodynamic model data, it should do at least as well on mathematically correct data. 
+$$
+\log Q_t = - \log n + \frac{5}{3} \log A_{rt} - \frac{2}{3} \log W_{rt} + \frac{1}{2} \log S_{rt} + \epsilon_{rt} \\
 
+\epsilon_{rt} \sim N(0, \sigma_\epsilon)
+$$
 
-I have a function to do simulate mass-conserved Manning data, but it is extremely limited in what it can represent in terms of case-specific nuances. 
+The reasoning behind this idea is as follows. If an algorithm can do inversions from SWOT data, it should be able to do at least as well on in-situ data. It should in turn do at least as well on hydrodynamic model-generated data as in-situ, and at least as well on mathematically correct data as hydrodynamic model data. 
+
+I have a function to do simulate mass-conserved Manning data, but it is presently limited in what it can represent in terms of case-specific nuances. Its error structure is also simplistic, but I believe it will be straightforward to add components such as basic measurement error and simple flood waves. I'll leave those limitations aside for now.
+
+What can this case generator do? Here it is at work, simulating a river with 10 reaches and 50 time intervals, with flow governed by a lag-1 autoregressive process with coefficient 0.95. Other characteristics are generated randomly from distributions informed by HydroSWOT.
 
 ```{r}
+foocase <- synth_new(nr = 10, nt = 50, logq_ar1 = 0.95)
 
+swot_plot(foocase$swotlist)
+```
+
+There is plenty here that might not pass the fluvial Turing test in terms of how the variables shown are distributed and interrelated. These issues can be addressed in the future. Nonetheless, this case is well-behaved in that it perfectly obeys equation 1, including error distribution. This point about error distribution can be seen in the closure plot (see previous post), here given in log space:
+
+```{r}
+plot_DAWG(manning_closure(foocase$swotlist, log = TRUE, center = TRUE))
 ```
 
 
+
+
+Here, then, is an opportunity to test McFLI algorithms when data are truly well behaved; I'll show this validation for BAM. Since BAM is built on the equation shown above, this is as good of a test case as we could hope for. Note, however, that just because we know the data generating process doesn't mean we can reliably infer the parameters. 
+
+```{r}
+library(bamr)
+foo_bd <- swot_bamdata(foocase$swotlist)
+foo_bp <- bam_priors(foo_bd, lowerbound_A0 = 1)
+
+foo_be <- bam_estimate(bamdata = foo_bd, variant = "manning", bampriors = foo_bp)
+
+bam_hydrograph(foo_be, qobs = foocase$swotlist$Q[1, ])
+```
+
+The following set of plots shows the same process repeated for 9 different randomly generated cases. 
+
+```{r, cache = TRUE}
+randcases <- map(1:9, ~synth_new(nr = 10, nt = 50, logq_ar1 = 0.95))
+randbds <- map(randcases, ~swot_bamdata(.$swotlist))
+randbps <- map(randbds, ~bam_priors(., lowerbound_A0 = 1))
+
+randests <- map2(randbds, randbps, ~bam_estimate(bamdata = .x, variant = "manning", bampriors = .y))
+
+randqobs <- map(randcases, ~.$swotlist$Q[1, ])
+```
+
+```{r}
+randvals <- map2(randests, randqobs, ~bam_validate(.x, .y))
+
+randvaldf <- randvals %>% 
+  map(~.$valdata) %>% 
+  bind_rows(.id = "rep")
+
+head(randvaldf)
+
+randvaldf %>% 
+  ggplot(aes(x = time)) + 
+  geom_line(aes(y = qpred), color = "#aa0066", linetype = 2) + 
+  geom_line(aes(y = qobs), color = "#555555") + 
+  facet_wrap(~rep, scales = "free_y") +  
+  ylab("Discharge, cms")
+
+```
+
+Not surprisingly, the results look better than they do in the Pepsi cases. But they're far from perfect! Some cases show clear bias, and that's because the prior on mean Q is imprecise (I designed it to generate QWBM from a distribution around true mean Q). Here are those same results in aggregate:
+
+```{r}
+randvaldf %>% 
+  ggplot(aes(x = qpred, y = qobs, color = rep)) +
+  geom_point() + 
+  scale_x_log10() + 
+  scale_y_log10() +
+  geom_abline(aes(slope = 1, intercept = 0))
+```
+
+
+What do these results look like in terms of metrics?
+
+```{r}
+randstats <- randvals %>% 
+  map(~as.data.frame(as.list(.$stats))) %>% 
+  bind_rows(.id = "rep")
+
+randstats %>% 
+  glimpse() %>% 
+  select(rep, RRMSE, NRMSE, rBIAS, NSE) %>% 
+  gather(key = "stat", value = "value", - rep) %>% 
+  mutate(stat = factor(stat, levels = c("RRMSE", "NRMSE", "rBIAS", "NSE"))) %>% 
+  ggplot(aes(x = stat, y = value)) + 
+  geom_boxplot() + 
+  geom_point(position = position_jitter(width = 0.2))
+```
+
+### Conclusions
+
+Even when all assumptions of a McFLI algorithm are met, it is not guaranteed that the discharge will invert perfectly. Significant biases still occur, and many cases still have performance metrics well above the target level. I view this as an unavoidable reality of McFLI algorithms, unless new physics are introduced. 
+
+### Next steps
+
+There is a lot more to explore here. I'm principally interested in how error structure influences these inversions, as well as how well we can capture the discharge uncertainty. Also, how can I build in different characteristics of real rivers and generate fake rivers of a certain flavor? I plan on making this case generator available to the DAWG and beyond--as an R function as well as (I hope!) a netcdf-producing gui. 
