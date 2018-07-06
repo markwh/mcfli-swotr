@@ -26,11 +26,26 @@ my_docker <- gce_tag_container("rstan-image", project = "testproject1-179318")
 
 
 jobs <- lapply(vm_names, function(x) {
+    gce_vm_template(template = "r-base",
+                    predefined_type = "n1-highmem-2",
+                    name = x,
+                    dynamic_image = my_docker)
+                    })
+
+vm1 <- gce_vm_template()
+
+jobs <- lapply(vm_names, function(x) {
   gce_vm_template(template = "dynamic", predefined_type = "n1-higmem-2", 
                   name = x,
-                  dynamic_image = my_docker, wait = FALSE)
+                  dynamic_image = my_docker)
 })
 
-vms <- lapply(vm_names, gce_wait)
+vms <- lapply(jobs, gce_wait)
+vms <- lapply(jobs, gce_vm)
+vms <- lapply(vms, gce_ssh_setup)
+
+plan(cluster, workers = vms)
+
+lapply(vms, gce_vm_stop)
 ```
 

@@ -1,0 +1,17 @@
+---
+title: "SWOT error structure"
+author: "Mark Hagemann"
+date: "July 6, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The likelihood function is derived from applying Manning's equation, a well-established equation in open-channel (i.e. river) hydraulics, at multiple locations and times in a mass-conserved segement of a river.
+
+For our purposes, Manning's equation is given by:
+
+
+

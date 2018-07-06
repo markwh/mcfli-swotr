@@ -1,0 +1,225 @@
+---
+title: "Autocorrelated errors and their implications for inversion"
+author: "Mark Hagemann"
+date: "July 2, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+
+theme_set(theme_bw())
+```
+
+This is one of what I hope will be a series of posts discussing contributions to and implications of structural errors within McFLI models of discharge. By "structural errors", I mean broadly anything that is not white noise--independent, identically distributed error structure. While there are many reasons why errors are not white noise, I'll focus here just on lack of independence in time between McFLI errors. 
+
+Because rivers (especially those to be observed by SWOT) integrate hydrologic processes over large drainage areas, they are slow to change and possess long memories of antecedent conditions. This manifests as discharge and related variables (e.g. channel geometry) that are highly correlated in time. If one day has discharge in the 10th percentile, the probability that the following day will have discharge below the 20th percentile is near certainty. The probability that discharge any time in the following week will exceed the 90th percentile is far less than 0.1, as would be the case if discharge values were temporally independent. This has implications for performance of inversion algorithms applied to daily or similarly short-interval cases (like Pepsi challenge cases). Its bearing on inversions using actual SWOT data is less severe, depending on the observation frequency.
+
+For a simple example of how this affects inference of hydrologic parameters, consider estimating mean discharge $\mu$ by sampling a $n_t$ observations of discharge. We would also like to have error bounds on our estimate, given by the standard error. The classical estimate and standard error are provided as follows:
+
+$$
+\hat{\mu} = \bar{Q} = \frac{1}{n_t} \sum_{t=1}^{n_t}Q_t \\
+se = \sqrt{\frac{1}{n(n-1)} \sum_{t = 1}^{n_t} (Q_t - \bar{Q})^2}
+$$
+
+
+In the case of SWOT inversions, what matters is not the autocorrelation of physical quantities, but rather that of model errors. If errors are highly autocorrelated and this autocorrelation is not accounted for in the McFLI algorithms, then estimates of discharge will underreport the uncertainty associated with those estimates. 
+
+
+### Estimating Manning error autocorrelation
+
+I don't know of a source that documents autocorrelation of Manning's equation errors, and I would be surprised if one exists. Autocorrelation of discharge is easier to get from myriad daily records of streamflow. From a random sample of USGS gauges, I get a typical AR1 coefficient (for log-transformed Q) of around 0.95. This would be a conservative estimate of Manning error AR1. 
+
+Using Pepsi 1 cases, we can do one better than this. 
+
+```{r}
+ar1fun <- function(x) {
+  if (length(na.omit(x)) == 0) return(NA)
+  out <- as.vector(acf(na.omit(x), plot = FALSE)$acf)[2]
+  out
+}
+
+swot_ar1 <- function(swotlist) {
+  errmat0 <- manning_closure(swotlist, log = TRUE, mc = FALSE, center = TRUE)
+  ars <- apply(errmat0, 1, ar1fun)
+}
+
+ardf <- reachdata %>% 
+  map(~swot_ar1(.)) %>% 
+  map(~data.frame(reach = 1:length(.), ar1 = .)) %>% 
+  bind_rows(.id = "case")
+
+arrange(ardf, ar1)
+arrange(ardf, desc(ar1))
+
+plot_DAWG(manning_closure(reachdata$Kanawha, log = TRUE, center = TRUE, mc = FALSE))
+plot_DAWG(reachdata$Kanawha$Q %>% log())
+
+plot_DAWG(manning_closure(reachdata$Ganges, log = TRUE, center = TRUE, mc = FALSE))
+plot_DAWG(reachdata$Ganges$Q %>% log())
+
+plot_DAWG(manning_closure(reachdata$Ohio, log = TRUE, center = TRUE, mc = TRUE))
+plot_DAWG(reachdata$Ohio$Q %>% log())
+
+
+ardf %>% 
+  ggplot(aes(x = case, y  = ar1)) +
+  geom_point() + 
+  theme(axis.text = element_text(angle = 90))
+  
+```
+
+
+So at least in the Pepsi 1 cases, many rivers have high AR1 errors (median is 0.79), but some are considerably lower, including 4 reaches (out of 128 total) with AR1 < 0.1.
+
+
+### Effective sample size
+
+Since autocorrelated errors mean wider error bounds for any given sample size, the we can think of the "effective sample size" of an autocorrelated sample as being equal to the number of observations of a similar, but uncorrelated, sample that would give the equivalent confidence interval. Assuming normally distributed errors with an AR1 time-series structure, the effective sample size is given by
+
+$$
+ESS = \frac{n(1 - \rho)}{1 + \rho}
+$$
+
+If $\rho = 0.95$, this value is $ESS \approx 0.026n$--meaning the sample is *effectively* 40 times smaller than the independence-assumption estimate of uncertainty would proclaim. 
+
+For Pepsi 1 cases, the distribution works out to 
+
+```{r}
+ardf %>% 
+  mutate(ess_coef = (1 - ar1) / (1 + ar1)) %>% 
+  ggplot(aes(x = case, y  = ess_coef)) +
+  geom_point() + 
+  theme(axis.text = element_text(angle = 90))
+```
+
+The reciprocal is perhaps easier to interpret. This gives the multiple of sample size that would have to be achieved in order to get independence-assumption standard errors. 
+
+```{r}
+ardf %>% 
+  mutate(ess_coef = (1 - ar1) / (1 + ar1)) %>% 
+  na.omit() %>% 
+  ggplot(aes(x = case, y  = 1 / ess_coef)) +
+  geom_point() + 
+  theme(axis.text = element_text(angle = 90)) +
+  scale_y_log10() +
+  annotation_logticks(sides = "l")
+```
+
+
+
+Now let's compare the AR1 coefficients of log Q to that of Manning error. 
+
+```{r}
+arqdf <- reachdata %>% 
+  map(~log(.$Q)) %>% 
+  map(~apply(., 1, ar1fun)) %>% 
+  map(~data.frame(reach = 1:length(.), ar1_q = .)) %>% 
+  bind_rows(.id = "case")
+
+ardf2 <- left_join(ardf, arqdf, by = c("case", "reach"))
+
+ardf2 %>% 
+  mutate(ar1_frac = ar1 / ar1_q) %>% 
+  ggplot(aes(x = case, y  = ar1_frac)) +
+  geom_point() + 
+  theme(axis.text = element_text(angle = 90))
+
+ardf2 %>% 
+  ggplot(aes(x = ar1_q, y  = ar1, color = case)) +
+  geom_point()
+```
+
+There is clearly a relationship between logQ AR1 and Manning error AR1, but it is not consistent. 
+
+This is only model-output "data", so these results should not be considered conclusive, but based on these cases it appears that 
+
+- error AR1 coefficients are generally large (> 0.8), but coefficients < 0.25, and even < 0.1 occasionally occur.
+- Error AR1 coefficients vary by river, and by reach, but rivers tend to have broadly similar AR1 coefficients. 
+- Reaches with larger logQ AR1 coefficients tend to have larger error AR1 coefficients, but the relationship is not strong enough to be predictive. 
+- Effective sample sizes are typically degraded by a factor of between 10 and 100 due to autocorrelation. In the worst case, ESS was less than 1/1000 of the actual sample size. 
+
+
+## Reality check.
+
+All of the above theory assumes symmetric, stationary, AR1-governed error time-series structure. This is only a crude model of Manning error time series; for example the following plot of Ganges Manning errors (log-space) show the seasonal and event-driven nature of these time series, as is true of hydrologic time series mor generally. True AR1 processes do not possess this behavior.
+
+```{r}
+reachdata$Ganges %>% 
+  manning_closure(log = TRUE, mc = FALSE, center = TRUE) %>% 
+  plot_DAWG()
+
+gangesAR1_0150 <- reachdata$Ganges %>% 
+  swot_sset(keeptimes = 1:150) %>% 
+  swot_ar1()
+
+gangesAR1_all <- reachdata$Ganges %>% 
+  swot_ar1()
+```
+
+How about empirically showing how dependence structure within Pepsi case errors affects inference of parameters of interest? I can give that a whirl. The steps I'll take are as follows:
+
+- Artificially close a Pepsi case so that it adheres to the mass-conserved Manning assumption perfectly
+    - Demonstrate the estimation of mean(logQ + logn) and A0 for this case
+- Simulate white-noise error with the same standard deviation as the actual error, but with perfect independence (since it's white noise)
+    - Show error in mean(logQ + logn) estimates
+- Repeat for AR1 error, scaled to match AR1 coefficient and standard deviation of true error
+- Repeat the same using the true error
+
+I can do this for 16 Pepsi 1 cases (the other 3 are missing some necessary data like true cross-sectional area) and compare the magnitude of error in parameter estimates in each case. 
+
+### Closed Pepsi 1 cases
+
+I wrote an R function to close a list of SWOT time-space matrices under Manning's equation (not mass-conserved Manning). 
+
+For this exercise I need some "truth" to compare estimates to. I will define "true Manning's n" to be the geometric mean of the closure term for each location. I will likewise define "true mean flow" to be the geometric mean of discharge at each location. These notions of truth are the population parameters if the population is restricted to only the observations in the SWOT dataset. 
+
+Let's consider a few different inference exercises. In the first, suppose cross-sectional area is a measured variable, and the quantity of interest is the geometric mean of $\alpha = Q \times n$. In this case we do not need mass conservation for the inference to work--we're just doing inference on the mean. 
+
+In the second, it's the opposite. Q and n are known, but A0 is not. This again does not require mass conservation, but the inference is slightly more complicated than computing a mean. 
+
+
+```{r}
+fooclosed1 <- reachdata$Ganges %>% 
+  manning_log_closed()
+
+fooest1 <- batman_log(fooclosed1, iterlim = 1000)
+
+estA0(fooclosed1)
+realA0(fooclosed1)
+
+plot(fooest1$A0, realA0(fooclosed1)); abline(0, 1)
+plot(estA0(fooclosed1), realA0(fooclosed1)); abline(0, 1)
+
+```
+
+
+
+### Example: estimating Manning's n with uncertainty
+
+Consider the following model for Manning's n.
+
+$$
+\log n = \frac{5}{3} \log A_{t} - \frac{2}{3} \log W_{t} + \frac{1}{2} \log S_{t} - \mu_q + \epsilon_{t}
+$$
+
+where \mu_q is the long-term mean of log-discharge. For this example suppose that A is known and that $\mu_q$ is uncertain with a known probability distribution (i.e. a prior, perhaps given by a water-balance model). Suppose that this distribution is $N(\hat{\mu}, \sigma_\mu)$. Then the right-hand side has 2 uncertain terms: $\log \mu_q$ and $\epsilon_t$, with the rest known (measured).
+
+A straightforward estimate of $\log n$ would be the mean of the right-hand side of this equation. The point-estimate for $\log n$ is then $\hat{\log n} = \frac{1}{T} \sum_{t=1}^T (\frac{5}{3} \log A_{t} - \frac{2}{3} \log W_{t} + \frac{1}{2} \log S_{t}) - \hat{\mu}_q$. But what's the uncertainty about this estimate?
+
+Since we can reasonably assume the error in $\mu_q$ to be independent of $\epsilon_t$, the variance of the estimate is
+
+$$
+Var(\log n) = Var(\mu_q) + Var \Big( \frac{1}{T} \sum_{t=1}^T \epsilon_t \Big)
+$$
+
+#### Scenario 1: white-noise $\epsilon$
+
+If $\epsilon_t \sim \text{i.i.d.} N(0, \sigma_\epsilon)$, then $Var \Big( \frac{1}{T} \sum_{t=1}^T \epsilon_t \Big) = \frac{\sigma^2_\epsilon}{T}$ and $Var(\hat{\log n}) = \sigma^2_\mu + \frac{\sigma^2_\epsilon}{T}$
+
+#### Scenario 2: AR1 $\epsilon_t$
+
+Suppose instead that $\epsilon_t$ is governed by an AR1 process with coefficient $\rho$. Then $Var \Big( \frac{1}{T} \sum_{t=1}^T \epsilon_t \Big) = \frac{\sigma^2_\epsilon}{T}$
+
+
