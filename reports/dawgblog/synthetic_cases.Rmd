@@ -6,8 +6,27 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
 ```
+
+
+```{r, echo = FALSE}
+set.seed(48395348)
+
+library(bamr)
+library(ggplot2)
+library(dplyr)
+library(rstan)
+library(purrr)
+library(tidyr)
+
+source("../../lib/swotr.R")
+source("../../lib/closure.R")
+source("../../lib/synth.R")
+
+theme_set(theme_bw())
+```
+
 
 The Pepsi challenges have proven their tremendous worth as a tool for verifying McFLI performance and applicability. Part of their value relates to the difficulty by which they are assembled and the sparseness of the models on which they rely. The mismatch between supply and demand for benchmark SWOT-lik cases leads to a kind of desperation for any useable model-derived dataset of SWOT-observable hydrologic quantities, and a corresponding gap between the set of benchmark cases we would like and the set we can reasonably expect to have.  
 
@@ -61,10 +80,9 @@ There is plenty here that might not pass the fluvial Turing test in terms of how
 plot_DAWG(manning_closure(foocase$swotlist, log = TRUE, center = TRUE))
 ```
 
+I see this as an opportunity to test McFLI algorithms when data are truly well behaved, and since datasets can be generated near-instantaneously it will be much easier to validate using a reasonably large sample. 
 
-
-
-Here, then, is an opportunity to test McFLI algorithms when data are truly well behaved; I'll show this validation for BAM. Since BAM is built on the equation shown above, this is as good of a test case as we could hope for. Note, however, that just because we know the data generating process doesn't mean we can reliably infer the parameters. 
+Next I'll show a validation using a pretty small sample of fake rivers for BAM. Since BAM is built on the equation shown above, this is as good of a test case as we could hope for. Note, however, that just because we know the data generating process doesn't mean we can infer the parameters wihout error. 
 
 ```{r}
 library(bamr)
@@ -76,10 +94,10 @@ foo_be <- bam_estimate(bamdata = foo_bd, variant = "manning", bampriors = foo_bp
 bam_hydrograph(foo_be, qobs = foocase$swotlist$Q[1, ])
 ```
 
-The following set of plots shows the same process repeated for 9 different randomly generated cases. 
+The following set of plots shows the same process repeated for 12 different randomly generated cases. Truth is shown as solid lines; estimates as dashed lines.
 
-```{r, cache = TRUE}
-randcases <- map(1:9, ~synth_new(nr = 10, nt = 50, logq_ar1 = 0.95))
+```{r}
+randcases <- map(1:12, ~synth_new(nr = 10, nt = 50, logq_ar1 = 0.95))
 randbds <- map(randcases, ~swot_bamdata(.$swotlist))
 randbps <- map(randbds, ~bam_priors(., lowerbound_A0 = 1))
 
@@ -88,7 +106,7 @@ randests <- map2(randbds, randbps, ~bam_estimate(bamdata = .x, variant = "mannin
 randqobs <- map(randcases, ~.$swotlist$Q[1, ])
 ```
 
-```{r}
+```{r, fig.width = 4, fig.height = 6}
 randvals <- map2(randests, randqobs, ~bam_validate(.x, .y))
 
 randvaldf <- randvals %>% 
@@ -101,7 +119,7 @@ randvaldf %>%
   ggplot(aes(x = time)) + 
   geom_line(aes(y = qpred), color = "#aa0066", linetype = 2) + 
   geom_line(aes(y = qobs), color = "#555555") + 
-  facet_wrap(~rep, scales = "free_y") +  
+  facet_wrap(~rep, scales = "free_y", ncol = 3) +  
   ylab("Discharge, cms")
 
 ```
@@ -137,7 +155,7 @@ randstats %>%
 
 ### Conclusions
 
-Even when all assumptions of a McFLI algorithm are met, it is not guaranteed that the discharge will invert perfectly. Significant biases still occur, and many cases still have performance metrics well above the target level. I view this as an unavoidable reality of McFLI algorithms, unless new physics are introduced. 
+Even when all assumptions of a McFLI algorithm are met, it is not guaranteed that the discharge will invert perfectly. Significant biases still occur, and many cases still have performance metrics well above the target level. I view this as an unavoidable reality of McFLI algorithms, unless new physical constraints are introduced to the system. 
 
 ### Next steps
 

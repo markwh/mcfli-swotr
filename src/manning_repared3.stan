@@ -2,11 +2,11 @@
 data {
   
   // Dimensions
-  int<lower=0> ns;
+  int<lower=0> ns; 
   int<lower=0> nt;
   
   // *Actual* data
-  vector[nt] x[ns];
+  vector[nt] x[ns]; // width and slope terms, already combined
   vector<lower=0>[nt] dA[ns];
   real<lower=1> dA_shift[ns]; // median(dA) - min(dA) for each location
 
@@ -60,7 +60,8 @@ transformed parameters {
   
   for (i in 1:ns) {
     A0_med[i] = cA0[i] / c[i];
-    z[i] = y - (5. / 3. * log(A0_med[i] + dA_med[i])) + dgdx * distdev_km[i] + nubar[i];
+    z[i] = y - (5. / 3. * log(A0_med[i] + dA_med[i])) + 
+           dgdx * distdev_km[i] + nubar[i];
   }
 }
 
