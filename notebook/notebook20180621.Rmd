@@ -85,7 +85,7 @@ pare_baminps <- function(baminplist) {
     logA0_sd = logA0_sd
   ))
   out
-}
+} 
 
 poinps <- bamdatas$Po %>% 
   bamr:::compose_bam_inputs(priors = bam_priors(., logA0_sd = 0.5)) %>% 
