@@ -1,0 +1,25 @@
+---
+title: "McFLI next steps"
+author: "Mark Hagemann"
+date: "June 28, 2018"
+output: 
+  ioslides_presentation:
+    incremental: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Proposed next steps for McFLI algorithms
+
+1. Document! Disseminate!
+2. Verify uncertainties
+    - including parameters
+3. Tabulate, formalize applicability cases
+4. SWOT-realistic benchmarking
+    - measurement error
+    - sampling interval
+5. Collaborative merging of algorithms/components?
+6. Synthetic assumption-adherent datasets?

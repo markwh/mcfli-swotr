@@ -12,3 +12,4 @@ lisflood/*
 *.tex
 data
 *.RData
+*cache

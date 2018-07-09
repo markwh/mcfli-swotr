@@ -5,7 +5,8 @@
 #' 
 #' Naively this could be considered Manning's n, but it varies in time and space
 #'   Also includes model error and (by default) flow imbalance error. 
-manning_closure <- function(swotlist, log = FALSE, mc = TRUE, mcfun = mean) {
+manning_closure <- function(swotlist, log = FALSE, mc = TRUE, 
+                            center = FALSE, mcfun = mean) {
   
   W <- swotlist$W
   S <- swotlist$S
@@ -19,23 +20,76 @@ manning_closure <- function(swotlist, log = FALSE, mc = TRUE, mcfun = mean) {
   
   out <- A ^ (5/3) * W ^ (-2/3) * S ^ (1/2) / Q
   
-  if (log) 
+  if (log) {
     out <- log(out)
+  }
+    
+  if (center) {
+    out <- out - swot_vec2mat(apply(out, 1, mean, na.rm = TRUE), out)
+  }
   
   out
 }
 
 
-# Produces a matrix that comports with McMan in linear A space. 
-# Obsmat should be a WS35 matrix, and by default will be calculated as ws35 for 
-# the supplied swotlist. The output will be coerced to have the same row-by-row 
-# mean as obsmat. 
+#' Produces a swotlist that comports with McMan in log space. 
+#' Obsmat should be a WS35 matrix, and by default will be calculated as ws35 for 
+#' the supplied swotlist. The output will be coerced to have the same row-by-row 
+#' mean as obsmat. 
+#' @param mc if TRUE, close under Mass-conserved Manning's equation, otherwise 
+#'  do not impose steady-state conservation of flow mass.
+#' @param vary_n Allow Manning's n to vary across space? If FALSE this will assume a
+#'  single Manning's n across all locations. 
+
+manning_log_closed <- function(swotlist, mc = FALSE, vary_n = TRUE,
+                               dA_zero = c("minimum", "median", "first")) {
+  
+  dA_zero <- match.arg(dA_zero)
+  
+  clos0 <- manning_closure(swotlist, log = TRUE, mc = mc, center = FALSE)
+  
+  if (vary_n) {
+    logn <- swot_vec2mat(apply(clos0, 1, mean), clos0)
+  } else {
+    logn <- mean(clos0)
+  }
+  
+  clos <- clos0 - logn
+  
+  logW <- log(swotlist$W)
+  logS <- log(swotlist$S)
+  logA <- log(swotlist$A)
+  
+  logWprime <- logW + (1 / 2 * clos)
+  logSprime <- logS - (2 / 3 * clos)
+  logAprime <- logA - (1 / 5 * clos)
+  
+  out <- within(swotlist, {
+    W = exp(logWprime)
+    S = exp(logSprime)
+    A = exp(logAprime)
+  })
+  
+  A0_real <- realA0(swotlist = swotlist, rezero = dA_zero)
+  out$dA <- rezero_dA(out$A - swot_vec2mat(A0_real, logW))
+
+  out
+}
+
+
+#' Produces a matrix that comports with McMan in linear A space. 
+#' Obsmat should be a WS35 matrix, and by default will be calculated as ws35 for 
+#' the supplied swotlist. The output will be coerced to have the same row-by-row 
+#' mean as obsmat. 
+#'
+#' @param adjust Scale the result to have the same space-varying mean as the original?
+
 
 manning_linA_closed <- function(swotlist, obsmat = NULL, adjust = TRUE) {
   if (is.null(obsmat)) {
     obsmat <- manning_ws35(swotlist = swotlist)
   }
-  clos <- manning_closure(swotlist)
+  clos <- manning_closure(swotlist, log = FALSE, mc = TRUE, center = FALSE)
   xmat <- obsmat * clos ^ (-3/5)
   
   rmeans_W <- apply(obsmat, 2, mean)

@@ -1,0 +1,52 @@
+---
+title: "SWOT error structure"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This project seeks to model a time-varying process (river discharge) using observations of time- and space-varying variables related to river geometry. 
+
+The likelihood function is derived from applying Manning's equation, a well-established equation in open-channel (i.e. river) hydraulics, at multiple locations and times in a mass-conserved segement of a river.
+
+For our purposes, Manning's equation is given by:
+
+$$
+q_t + n = \frac{5}{3} a_{st} - \frac{2}{3} w_{st} + \frac{1}{2}s_{st} + \epsilon_{st}
+$$
+
+where $s$ and $t$ index space and time, respectively. $q$, which represents log-transformed streamflow, is the primary quantity of interest. $n$ is an unobservable variable that makes this model not fully identifiable, but we have a reasonably tight prior for it. The RHS variables $w$ and $s$ are measured, and $a$ is partly measured, decomposed as follows:
+
+$$
+a_{st} = \log (A_{0, s} + \delta A_{st})
+$$
+
+where $A_{0, s}$ is unknown, fixed in time but varies in space and $\delta A_{st}$ is measured. 
+
+In the current form of the model we model $\epsilon$ as iid normal with known variance. But this is inadequate, and that's what I'm trying to fix. In reality the time series for $\epsilon$ look something like this (just a few examples).
+
+```{r}
+reachdata[c(3:5, 6:7)] %>% 
+  map(~manning_closure(., log = TRUE, mc = TRUE, center = TRUE)) %>% 
+  map(~plot_DAWG(.))
+```
+
+Some reasons for these dependencies are:
+
+1. $q_t$ that varies in space, which can mostly be modeled by a spatially constant, temporally variable $\partial q / \partial r$ term.
+2. $n$ that varies in space due to channel characteristics varying along the river
+3. $n$ that varies in time--typically because it has a dependency on $w$ and $a$. Unfortunately I don't think there is a way to know the nature of this dependency a priori, as it varies from river to river and is not linear. 
+
+Of these, I've tried modeling 1 and 2, and based on ANOVA this often explains around 50% of residual error variance--sometimes more, sometimes less, depending on the river.
+
+### Priors
+
+- $q_t$ has a normal prior based on a global satellite water balance model
+- $n$ has a normal prior based on literature for applying Manning's equation
+- $A_{0, s}$ has a lognormal prior based on a U.S. databse of river geometry. 
+
+### Posterior issues
+
+River geometry is highly correlated in space. This means that $A_0$ parameters are strongly correlated in the parameter space, manifesting as severe ridges in the posterior. 

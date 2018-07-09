@@ -56,12 +56,15 @@ reachdA <- reachdata0 %>%
   map(~.$A) %>% 
   map2(reachA0, function(x, y) x - y)
 
-reachdata <- map2(reachdata0, reachdA, function(x, y) {x$dA <- y; x})
+reachdata1 <- map2(reachdata0, reachdA, function(x, y) {x$dA <- y; x})
 
 Qmats <- nclists %>% 
   map(~.$Reach_Timeseries.Q[.$River_Info.gdrch, ])
 Qhats <- nclists %>% 
-  map(~.$River_Info.QWBM)
+  map(~.$River_Info.QWBM[1])
+
+reachdata <- map2(reachdata1, Qhats, 
+                  function(x, y) {attr(x, "QWBM") <- y; x})
 
 cache("reachdata")
 cache("Qmats")

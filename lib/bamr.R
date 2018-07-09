@@ -3,9 +3,45 @@
 # 04/03/2018
 # Functions to put into the bamr package, when I'm done here
 
-estimate_logA0 <- function(Wobs) {
-  lwbar <- apply(log(Wobs), 1, mean)
-  lwsd <- apply(log(Wobs), 1, sd)
-  logA0hat <- -1.782 + 1.438 * lwbar - 2.268 * lwsd
-  logA0hat
+
+#' convert a list of bamr inputs to a list suitable for pared model input. 
+pare_baminps <- function(baminplist) {
+  out <- with(baminplist, list(
+    ns = nx,
+    nt = nt,
+    x = 1/2 * log(Sobs) - 2/3 * log(Wobs),
+    dA = rezero_dA(dAobs, "minimum"),
+    dA_shift = dA_shift,
+    sigma_err = median(sigma_man),
+    mu_hat = logQ_hat + logn_hat,
+    mu_sd = sqrt(logQ_sd^2 + logn_sd^2),
+    logA0_hat = logA0_hat,
+    logA0_sd = logA0_sd
+  ))
+  out
+}
+
+#' Add closure characterization parameters to input list
+#' 
+#' @param inplist List of Stan inputs
+#' @param swotlist a swotlist of matrices
+#' @param tenkm Represent distances in units of 10 km? This assumes swotlist uses 1-m units. 
+#' @param method Passed to characterize_closure
+#' 
+add_closure_char <- function(inplist, swotlist, tenkm = TRUE, 
+                             method = c("decomp", "anova")) {
+  method <- match.arg(method)
+  if (tenkm) {
+    swotlist$x <- swotlist$x / 10000
+  }
+  
+  char <- characterize_closure(swotlist = swotlist, method = method)
+  
+  out <- inplist
+  out$dist_km <- swotlist$x[, 1]
+  out$sigma_dgdx <- char$dgdx
+  out$sigma_nubar <- char$nuhat
+  out$sigma_err <- char$err
+  
+  out
 }

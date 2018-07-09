@@ -1,0 +1,100 @@
+---
+title: "Pepsi 2 BAM runs"
+author: "Mark Hagemann"
+date: "June 26, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+load("../data/pep2objs.RData")
+```
+
+```{r}
+valstats_man <- map2(bamsamps, pep2_qobs, ~bam_validate(.x, .y)$stats)
+statdf_man <- valstats_man %>% 
+  setNames(names(pep2_qobs)) %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  bind_rows(.id = "case")
+valstats_man_amhg <- map2(bamsamps_man_amhg, pep2_qobs, 
+                          ~bam_validate(.x, .y)$stats)
+```
+
+
+This post will briefly show BAM results on Pepsi 2 cases. While I have been actively working on improvements to BAM over the past month or so, these have yet to become ready for application--something for another blog post. Meanwhile I'll show results using the version of BAM that was previously applied to Pepsi 1 cases. 
+
+The bird's-eye view is much the same as Pepsi 1: some cases are inverted very well, whereas most are less than satisfactory. Median RRMSE across the 32 Pepsi 2 cases was 48%, and median NRMSE was 54%. 12 of 32 cases had RRMSE below the 35% threshold; the same 12 cases had NRMSE below 0.35. 8 cases had RRMSE > 100%, and 10 had NRMSE > 100%. The maximum RRMSE and NRMSE were 966% and 795%, respectively, indicating a proneness of inversions to fail hard.
+
+The following table shows the results, sorted by RRMSE. 
+
+```{r}
+stattable <- statdf_man %>% 
+  select(case, RRMSE, NRMSE, NSE) %>% 
+  arrange(RRMSE) %>% 
+  kable(digits = 2, format = "latex") 
+
+statdf_man %>% 
+  select(case, RRMSE, NRMSE, NSE) %>% 
+  arrange(RRMSE)
+
+library(kableExtra)
+kable_as_image(kable_input = stattable, filename = "../graphs/manning_statstable")
+```
+
+Manning + AMHG results are similar. Median RRMSE and NRMSE are 50% and 55%, respectively; number of cases with RRMSE and NRMSE below 35% is 11 and 12, respectively; number of cases with RRMSE and NRMSE above 100% is 8 and 10, respectively. Full results are in the following table. 
+
+
+
+```{r}
+valstats_man_amhg <- map2(bamsamps_man_amhg, pep2_qobs, 
+                          ~bam_validate(.x, .y)$stats)
+statdf_man_amhg <- valstats_man_amhg %>% 
+  setNames(names(pep2_qobs)) %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  bind_rows(.id = "case")
+```
+
+```{r, eval = FALSE}
+median(statdf_man_amhg$RRMSE)
+median(statdf_man_amhg$NRMSE)
+
+sum(statdf_man_amhg$RRMSE < 0.35)
+sum(statdf_man_amhg$NRMSE < 0.35)
+
+sum(statdf_man_amhg$RRMSE > 1)
+sum(statdf_man_amhg$NRMSE > 1)
+
+max(statdf_man_amhg$RRMSE)
+max(statdf_man_amhg$NRMSE)
+```
+
+```{r}
+statdf_man_amhg %>% 
+  select(case, RRMSE, NRMSE, NSE) %>% 
+  arrange(RRMSE)
+
+statdf_man_amhg %>% 
+  select(case, RRMSE, NRMSE, NSE) %>% 
+  arrange(RRMSE) %>% 
+  kable(digits = 2, format = "latex") %>% 
+  kable_as_image("../graphs/manning_amhg_statstable.png")
+```
+
+Without getting too deep into apologetics, I'll show a couple of cases that are particularly interesting. 
+
+The worst-performing case in both variants and metrics was Olentangy--by a wide margin. Part of the problem with this case is that it is a very small river--cross-sectional area is less than 20 square meters in 4 of the 7 reaches. BAM uses a hard bound on A0 of 30 meters, so this case is not a good match for the algorithm. Even aside from this, the hydraulics don't comport well with Manning's equation. In order for Manning's to hold, Manning's n would need to be larger than 0.1 for 3 reaches, and as high as 0.4 for one particular reach! 
+
+One more interesting case, and then I'll wrap up. TuolumneRiver jumps out from the Manning+AMHG stats table in that it has very good R/NRMSE and very poor NSE. A plot of the predicted and true hydrograph shows what's going on:
+
+```{r}
+bam_hydrograph(bamsamps_man_amhg[[32]], pep2_qobs[[32]]) + theme_bw()
+ggsave(filename = "../graphs/Tulomne_val.png")
+```
+
+The predictions have low bias and low relative errors, but the errors have high variance relative to the variance of the true hydrograph. This is a case in which the small number of observations overstates the performance of the predictions. I suspect that if we were able to see more of the river's natural variability (assuming it has significant variability), the relatively large variability of the predictions would result in higher R/NRMSE than we see in the validations. 
+
+
+

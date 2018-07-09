@@ -1,0 +1,82 @@
+---
+title: "Flash talk"
+author: "Mark Hagemann"
+date: "June 28, 2018"
+output: 
+  ioslides_presentation:
+    incremental: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(ggplot2)
+library(knitr)
+library(dplyr)
+library(purrr)
+library(tidyr)
+
+load("../../cache/uscase.RData")
+source("../../lib/swotr.R")
+source("../../lib/closure.R")
+theme_set(theme_bw(base_size = 20))
+```
+
+```{r, eval = FALSE, echo = FALSE}
+Mass-conserved Manning is a powerful model, underlying most McFLI algorithms. 
+
+This is how we turn SWOT observations into knowledge about discharge. 
+
+SWOT observables vary in time and spce (indexed by t, r). Parameters vary in one or the other.
+
+If this equality holds, we can do great things. For example, estimate A0 perfectly. 
+
+In reality we have trouble doing this, even where observation error is zero (Pepsi cases)
+
+Why is this so? Where do inversions fail?
+
+It must be that the equation is imperfect. What aspects of this matter most?
+
+Approach: make ultra-simple synthetic datasets, see how equation fails, apply inference methods.
+
+Some of this is perfectly explained by the model--e.g. linear model theory, variance inflation from highly correlated locations' data.
+```
+
+
+
+## Mass-conserved Manning's equation
+
+$$
+Q_t = \frac{1}{n} W_{rt}^{-2/3} (A_{0,r} + \delta A_{rt})^{5/3} S_{rt}^{1/2}
+$$
+
+- Observed: $W_{rt}, \delta A_{rt}, S_{rt}$
+- Unobserved: $Q_t, n, A_{0,r}$
+
+- This model is nice, but does not hold perfectly. 
+
+## Getting closure
+
+$$
+Q_t = \frac{1}{n_{rt}} W_{rt}^{-2/3} (A_{0,r} + \delta A_{rt})^{5/3} S_{rt}^{1/2}
+$$
+
+Treating $n_{rt}$ as a closure term forces the equation to hold. 
+
+## Lisflood toy model
+
+```{r}
+swot_plot(uscase, vars = c("Q", "A", "W", "S")) + ylab("")
+```
+
+
+
+## Getting closure
+
+$$
+Q_t = \frac{1}{n_{rt}} W_{rt}^{-2/3} (A_{0,r} + \delta A_{rt})^{5/3} S_{rt}^{1/2}
+$$
+
+```{r}
+plot_DAWG(manning_closure(uscase)) + ylab("n_rt")
+```
+

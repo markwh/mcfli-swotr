@@ -1,0 +1,178 @@
+---
+title: "notebook20180625"
+author: "Mark Hagemann"
+date: "June 25, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+It's time to see what these pared models can do. Principally I'm interested in whether they can estimate A0. 
+
+First make the requisite objects. 
+
+```{r}
+pareddatas <- reachdata[c(1:15, 19)] %>% 
+  map(swot_bamdata) %>% 
+  map(~bamr:::compose_bam_inputs(.)) %>% 
+  map(~pare_baminps(.)) %>% 
+  map2(reachdata[c(1:15, 19)], ~add_closure_char(.x, .y, method = "anova"))
+
+```
+
+
+Start with most omniscent version -- repared5.stan. 
+
+```{r}
+library(rstan)
+mod5 <- stan_model("../src/manning_repared5.stan")
+
+foo <- optimizing(object = mod5, data = pareddatas$Connecticut, as_vector = FALSE)
+
+opts5 <- map(pareddatas, ~optimizing(mod5, data = ., as_vector = FALSE))
+
+samplist5 <- list()
+for (i in 1:length(pareddatas)) {
+  samplist5[[i]] <- sampling(mod5, data = pareddatas[[i]], pars = "z", 
+                             include = FALSE, chains = 3, cores = 3,
+                             control = list(max_treedepth = 15, 
+                                            adapt_delta = 0.95))
+}
+
+pairs(samplist5[[1]], pars = "A0")
+
+```
+
+
+Diverging. See if 4 or 3 do any better. 
+
+
+```{r}
+mod4 <- stan_model("../src/manning_repared4.stan")
+# samplist4 <- list()
+
+# for (i in 1:3) {
+  samplist4[[i]] <- sampling(mod4, data = pareddatas[[i]], pars = "z", 
+                             include = FALSE, chains = 3, cores = 3,
+                             control = list(max_treedepth = 15, 
+                                            adapt_delta = 0.95))
+# }
+
+map_dbl(samplist4, max_rhat)
+
+check_rhat(samplist4[[1]])
+
+stan_trace(samplist4[[1]], "A0")
+stan_trace(samplist4[[2]], "A0")
+stan_trace(samplist4[[3]], "A0")
+stan_trace(samplist4[[4]], "A0")
+stan_trace(samplist4[[5]], "A0")
+```
+
+
+```{r}
+mod3 <- stan_model("../src/manning_repared3.stan")
+# samplist3 <- list()
+
+# for (i in 1:3) {
+  samplist3[[i]] <- sampling(mod3, data = pareddatas[[i]], pars = "z", 
+                             include = FALSE, chains = 3, cores = 3,
+                             control = list(max_treedepth = 15, 
+                                            adapt_delta = 0.95))
+# }
+
+## That took 2936 seconds!
+
+map_dbl(samplist3, max_rhat)
+
+check_rhat(samplist3[[1]])
+
+stan_trace(samplist3[[1]], "A0")
+stan_trace(samplist3[[2]], "A0")
+stan_trace(samplist3[[3]], "A0")
+stan_trace(samplist3[[4]], "A0")
+```
+
+I should go back to the original repared model to compare.
+
+```{r}
+mod1 <- stan_model("../src/manning_repared.stan")
+
+samplist1 <- list()
+
+for (i in 2:5) {
+  samplist1[[i]] <- sampling(mod1, data = pareddatas[[i]], pars = "z", 
+                             include = FALSE, chains = 3, cores = 3,
+                             iter = 4000, warmup = 3000,
+                             control = list(max_treedepth = 15, 
+                                            adapt_delta = 0.99))
+}
+
+stan_trace(samplist1[[1]], "A0", inc_warmup = TRUE)
+stan_trace(samplist1[[2]], "A0", inc_warmup = TRUE)
+stan_trace(samplist1[[3]], "A0", inc_warmup = TRUE)
+stan_trace(samplist1[[4]], "A0", inc_warmup = TRUE)
+stan_trace(samplist1[[5]], "A0", inc_warmup = TRUE)
+stan_trace(samplist1[[5]], "A0", inc_warmup = FALSE)
+
+```
+
+
+Inspect the means.
+
+```{r}
+
+means1 <- map(samplist1, ~get_posterior_mean(., pars= "A0")[, 4]) %>% 
+  map(~data.frame(reach = 1:length(.), estA0 = .)) %>% 
+  setNames(names(reachdata)[1:length(.)]) %>% 
+  bind_rows(.id = "case")
+
+means3 <- map(samplist3, ~get_posterior_mean(., pars= "A0")[, 4]) %>% 
+  map(~data.frame(reach = 1:length(.), estA0 = .)) %>% 
+  setNames(names(reachdata)[1:length(.)]) %>% 
+  bind_rows(.id = "case")
+
+means4 <- map(samplist4, ~get_posterior_mean(., pars= "A0")[, 4]) %>% 
+  map(~data.frame(reach = 1:length(.), estA0 = .)) %>% 
+  setNames(names(reachdata)[1:length(.)]) %>% 
+  bind_rows(.id = "case")
+
+means5 <- map(samplist5, ~get_posterior_mean(., pars= "A0")[, 4]) %>% 
+  map(~data.frame(reach = 1:length(.), estA0 = .)) %>% 
+  setNames(names(reachdata)[1:length(.)]) %>% 
+  bind_rows(.id = "case")
+
+linvals <- map(reachdata[1:length(samplist4)], ~estA0(., zero = "minimum")) %>% 
+  map(~data.frame(reach = 1:length(.), estA0 = .)) %>% 
+  bind_rows(.id = "case")
+
+realvals <- map(reachdata[1:length(samplist4)], ~realA0(., rezero = "minimum")) %>% 
+  map(~data.frame(reach = 1:length(.), realA0 = .)) %>% 
+  bind_rows(.id = "case")
+
+```
+
+Make the data.frame to plot.
+
+```{r}
+plotdf <- list(
+  # mod1 = means1,
+  mod3 = means3,
+               # mod4 = means4,
+               # mod5 = means5,
+               linmod = linvals) %>% 
+  bind_rows(.id = "method") %>% 
+  left_join(realvals, by = c("case", "reach"))
+
+ggplot(plotdf, aes(x = realA0, y = estA0, color = method)) +
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_abline(aes(slope = 1, intercept = 0))
+
+
+```
+
+

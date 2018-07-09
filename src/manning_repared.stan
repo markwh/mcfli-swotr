@@ -36,26 +36,18 @@ parameters {
   real<lower=0> sigma_y;
   real mu;
   
-  real
-  
-  real<lower=0> logA0bar;
-  real<lower=0> logA0_dev[ns];
-  
+  real<lower=0> A0[ns];
   real<lower=0> truesigma_err;
-  
 }
 
 transformed parameters {
   
   vector[nt] z[ns];
-  real logA0_med[ns];
+  real A0_med[ns];
   
   for (i in 1:ns) {
-    logA0_med[i] = log(A0 + dA_shift);
-    
-    A0[i] = A0bar + A0dev;
-    a[i] = (5. / 3. * log(A0[i] + dA[i]))
-    z[i] = y - a[i];
+    A0_med[i] = A0[i] + dA_shift[i];
+    z[i] = y - (5. / 3. * log(A0[i] + dA[i]));
   }
 }
 
@@ -64,11 +56,8 @@ model {
   for (i in 1:ns) {
     x[i] ~ normal(z[i], truesigma_err); //already scaled by sigma_err
     
-    logA0_dev[i] ~ normal(xbar_dev[i])
-    
     // prior on A0
-    logA0bar ~ normal(mean(logA0_hat), logA0_sd);
-    // A0[i] + dA_shift[i] ~ lognormal(logA0_hat[i], logA0_sd);
+    A0_med[i] ~ lognormal(logA0_hat[i], logA0_sd);
   }
   
   // Priors
