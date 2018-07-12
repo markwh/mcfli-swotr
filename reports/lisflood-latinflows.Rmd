@@ -1,0 +1,46 @@
+---
+title: "lisflood-latinflows"
+author: "Mark Hagemann"
+date: "July 10, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Doing some lisflood work for Mike.
+
+```{r}
+dirs <- paste0(list.dirs("../../lisflood/toy_1/lat-inflows", 
+                         recursive = FALSE), "/results")
+dirnames <- list.dirs("../../lisflood/toy_1/lat-inflows", 
+                         recursive = FALSE, full.names = FALSE)
+
+reslist <- map(dirs, ~lis_reaches(lis_profiles(.)))
+
+resdf <- reslist %>% 
+  setNames(dirnames) %>% 
+  bind_rows(.id = "run")
+
+resdf %>% 
+  ggplot(aes(x = time, y = Q, color = loc, group = loc)) +
+  geom_line() + 
+  facet_wrap(~run, scales = "free_y")
+```
+
+```{r}
+
+resdf %>% 
+  group_by(run, loc) %>% 
+  summarize(minq = min(Q), medq = median(Q), maxq = max(Q))
+```
+
+
+```{r}
+resdf %>% 
+  filter(loc == 3) %>% 
+  group_by(run) %>% 
+  summarize(minq = min(Q))
+```
+

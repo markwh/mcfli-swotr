@@ -6,7 +6,7 @@ data {
   int<lower=0> nt;
   
   // *Actual* data
-  vector[nt] x[ns]; // width and slope terms, already combined
+  vector[nt] x[ns]; // w and s terms, already combined
   vector<lower=0>[nt] dA[ns];
   real<lower=1> dA_shift[ns]; // median(dA) - min(dA) for each location
 
@@ -25,7 +25,7 @@ data {
 transformed data {
   real<upper=0.1> mindA[ns]; // Just to verify that dA is appropriately shifted.
   vector[nt] dA_med[ns]; // median-shifted dA
-  real c[ns];
+  real c[ns]; // 
   real distdev_km[ns];
 
   for (i in 1:ns) {
