@@ -1,0 +1,52 @@
+---
+title: "More error structure"
+author: "Mark Hagemann"
+date: "July 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I think it's easiest to think of this problem as an ANOVA model with a latent partially obseved variable. 
+
+Continuing with the defininitions in the last document, define $x_{st} = - \frac{2}{3}w_{st} + \frac{1}{2} s_{st}$. Then the ANOVA is:
+
+$$
+x_{st} + \frac{5}{3}a_{st} = q_t + n + \epsilon_{st}
+$$
+
+The current, working version of the model implements this as follows:
+
+- $a_{st} = \log(A_{0,s} + \delta A_{st})$
+- $q_t \sim N(\mu_q, \sigma_q)$, both parameters known
+- $n \sim N(\mu_n, \sigma_n)$, both parameters known
+- $\epsilon \sim N(0, \sigma_\epsilon)$
+
+This works alright, but it's misspecified in that:
+
+- variance parameters are typically not known
+- $\mu_q$ should really be a prior on the mean of $q$
+- $\epsilon$ is not independent in space ($s$ index) or time ($t$ index).
+
+I'd like to instead implement the following, but I'm having trouble doing this, especially doing this in a reasonable amount of time. 
+
+$$
+x_{st} + \frac{5}{3}a_{st} = q_t + n + \gamma_td_s + \nu_s + \epsilon_{st}
+$$
+
+Where priors are the same except:
+
+- $q_t = \bar{q} + \dot{q}_t$
+- $\bar{q} \sim N(\mu_q, \sigma_q)$, both parameters known
+- $\dot{q} \sim N(0, \tau)$, $\tau$ unknown but has hyperprior
+- $\gamma \sim N(0, \sigma_\gamma)$, $\sigma_\gamma$ unknown but has hyperprior
+- $d_s$ is a known (measured) variable giving the downstream distance of location $s$ in the river
+- $\nu_s \sim N(0, \sigma_\nu)$, $\sigma_\nu$ unknown but has hyperprior 
+- $\epsilon$ then has same distribution as above, but $\sigma_\epsilon$ is unknown, but with a hyperprior
+
+
+
+

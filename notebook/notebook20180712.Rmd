@@ -1,0 +1,90 @@
+---
+title: "notebook20180712"
+author: "Mark Hagemann"
+date: "July 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+reachdata$GaronneDownstream %>% 
+  swot_sset(keeplocs = 3:5) %>% 
+  val_nd_plot()
+
+
+reachdata$GaronneUpstream %>% 
+  swot_sset(keeplocs = 1:3) %>% 
+  val_nd_plot()
+
+reachdata$GaronneDownstream %>% 
+  swot_sset(keeplocs = 1:3) %>% 
+  val_nd_plot()
+
+
+reachdata$Kanawha %>% 
+  val_nd_plot()
+
+reachdata$Kanawha %>% 
+  manning_closure(log = TRUE, center = TRUE) %>% 
+  plot_DAWG()
+
+characterize_closure(reachdata$Kanawha, method = "anova")
+
+reachdata$Kanawha %>% 
+  swot_purge_nas() %>% 
+  batman_log()
+
+reachdata$Kanawha %>% 
+  swot_purge_nas() %>% 
+  realA0()
+
+reachdata$Kanawha %>% 
+  swot_tidy() %>% 
+  summary()
+
+
+reachdata$MississippiDownstream %>% 
+  val_nd_plot()
+
+reachdata$MississippiUpstream %>% 
+  val_nd_plot()
+
+reachdata$Ohio %>% 
+  val_nd_plot()
+
+reachdata$Platte %>% 
+  swot_sset(keeplocs = 1:3) %>% 
+  val_nd_plot()
+
+reachdata$Po %>% 
+  swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+reachdata$SacramentoDownstream %>% 
+  swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+reachdata$SacramentoUpstream %>% 
+  # swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+reachdata$Seine %>% 
+  # swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+reachdata$Severn %>% 
+  # swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+reachdata$Wabash %>% 
+  # swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+
+
+```
+

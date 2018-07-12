@@ -37,7 +37,7 @@ transformed data {
 }
 
 parameters {
-  vector[nt] y;
+  vector[nt] y; // sum of q_t and n
   real<lower=0> sigma_y;
   real mu_y;
   
