@@ -1,17 +1,24 @@
 ---
 title: "SWOT error structure"
-output: html_document
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
+
+library(dplyr)
+library(purrr)
+library(ggplot2)
+load("../cache/reachdata.RData")
+source("../lib/closure.R")
+source("../lib/swotr.R")
 ```
 
-This project seeks to model a time-varying process (river discharge) using observations of time- and space-varying variables related to river geometry. 
+This project seeks to model a time-varying process (river discharge) using satellite observations of time- and space-varying variables related to river geometry. 
 
 The likelihood function is derived from applying Manning's equation, a well-established equation in open-channel (i.e. river) hydraulics, at multiple locations and times in a mass-conserved segement of a river.
 
-For our purposes, Manning's equation is given by:
+For our purposes, Manning's equation can be given by:
 
 $$
 q_t + n = \frac{5}{3} a_{st} - \frac{2}{3} w_{st} + \frac{1}{2}s_{st} + \epsilon_{st}

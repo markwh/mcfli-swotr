@@ -57,3 +57,53 @@ bat_data <- function(swotlist, logA0_hat = 7, sigma_logA0 = 7,
               sigma_err = sigma_err)
   out
 }
+
+
+#' Returns a lagged swotlist, possibly with a new Ahat piece
+ccf_lag <- function(swotlist, Ahat = TRUE, verbose = FALSE) {
+  
+  # initialize dl, the datalist that will be modified
+  dl <- swotlist
+  # browser()
+  for(i in 1:10) {
+    # cat(i, "\n")
+    ntimes <- ncol(dl$W)
+    
+    W <- dl$W
+    S <- dl$S
+    dA <- rezero_dA(dl$dA, "minimum")
+    
+    # initialize A0
+    delta <- 10
+    A0 <- estA0(swotlist = dl, zero = "minimum", random_omega = FALSE, ndot = 1)
+    if (verbose) cat(A0, "\n")
+    
+    A0[A0 <= 0] <- min(W[W>0])
+    A <- dA + swot_vec2mat(A0, pattern = W)
+    
+    logmanlist <- (W^(-2/3) * S^(1/2) * A^(5/3)) %>%
+      t() %>%
+      log() %>%
+      as.data.frame()
+    
+    ccs <- map(2:length(logmanlist),
+               ~ccf(logmanlist$V1, logmanlist[[.]], plot = FALSE, na.action = na.pass))
+    bestlags <- c(0L, map_int(ccs, ~as.integer(.$lag)[which.max(.$acf)]))
+    if (verbose) cat(bestlags, "\n")
+    
+    
+    if (sum(!bestlags == 0) == 0)
+      break
+    
+    dl <- swot_timelag(dl, bestlags)
+  }
+  
+  out <- dl
+  
+  if (Ahat)
+    out$Ahat <- A
+  
+  attr(out, "QWBM") <- attr(swotlist, "QWBM")
+  
+  out
+}
