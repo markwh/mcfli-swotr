@@ -14,7 +14,6 @@ bam_llfun <- function(bamdata) {
   }
 }
 
-source("../mcfli-swotr/lib/swotr.R")
 
 bam_errmatfun <- function(bamdata) {
   logW <- log(bamdata$Wobs)

@@ -61,7 +61,30 @@ reachdata$Platte %>%
   val_nd_plot()
 
 reachdata$Po %>% 
-  swot_sset(keeplocs = 2) %>%
+  swot_sset(keeplocs = 2:5) %>%
   val_nd_plot()
+
+reachdata$SacramentoDownstream %>% 
+  swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+reachdata$SacramentoUpstream %>% 
+  # swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+reachdata$Seine %>% 
+  # swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+reachdata$Severn %>% 
+  # swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+reachdata$Wabash %>% 
+  # swot_sset(keeplocs = 2:5) %>%
+  val_nd_plot()
+
+
+
 ```
 
