@@ -9,9 +9,9 @@ knitr::opts_chunk$set(echo = FALSE)
 library(dplyr)
 library(purrr)
 library(ggplot2)
+library(swotr)
 load("../cache/reachdata.RData")
 source("../lib/closure.R")
-source("../lib/swotr.R")
 ```
 
 This project seeks to model a time-varying process (river discharge) using satellite observations of time- and space-varying variables related to river geometry. 
