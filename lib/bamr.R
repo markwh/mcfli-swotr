@@ -45,3 +45,22 @@ add_closure_char <- function(inplist, swotlist, tenkm = TRUE,
   
   out
 }
+
+#' Augment a swotcase with posterior mean from BAM
+#' 
+#' @param swotlist a list of SWOT-like observations
+#' @param stanfit a stanfit object, as produced by \code{bam_estimate}
+#' 
+meancase <- function(swotlist, stanfit) {
+  out <- swotlist
+  A0mat <- get_posterior_mean(stanfit, pars = "A0")
+  A0 <- A0mat[, ncol(A0mat)]
+  out$A <- swot_A(A0, out$dA)
+  
+  qmat <- get_posterior_mean(stanfit, pars = "logQ")
+  qvec <- bam_qpred(stanfit)$mean
+  
+  out$Q <- swot_vec2mat(qvec, out$A)
+  
+  out
+}

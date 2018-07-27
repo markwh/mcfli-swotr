@@ -1,0 +1,447 @@
+---
+title: "notebook20180713"
+author: "Mark Hagemann"
+date: "July 13, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Today I try a gibbs sampler for SWOT data.
+
+```{r}
+library(truncnorm)
+
+# Sampler utility functions ------------------------
+postmu <- function(primu, prisigsq, likmu, liksigsq, n) {
+  mu <- (liksigsq * primu + n * prisigsq * likmu) / (n * prisigsq + liksigsq)
+  mu
+}
+
+postsigsq <- function(prisigsq, liksigsq, n) {
+  sigsq <- (liksigsq * prisigsq) / (n * prisigsq + liksigsq)
+  sigsq
+}
+
+# Formulas from https://arxiv.org/pdf/1605.01019.pdf
+invgam_mom <- function(mean, sd) {
+  alpha <- mean^2 / (sd^2) + 2
+  beta <- mean * (alpha - 1)
+  out <- c(alpha = alpha, beta = beta)
+  out
+}
+
+# Formulas from http://www.stat.cmu.edu/~brian/463-663/week10/Chapter%2004.pdf
+# Also https://www.coursera.org/lecture/mcmc-bayesian-statistics/computing-example-with-normal-likelihood-Ilg9Z
+postalpha <- function(prialpha, n) {
+  alpha <- prialpha + n / 2
+  alpha
+}
+
+postbeta <- function(pribeta, y, mu) {
+  beta <- pribeta + 1 / 2 * sum((y - mu)^2)
+  beta
+}
+
+
+## Sampling functions ---------------------------
+
+# sample_rhs <- function() {
+#   ahatmat <- swot_vec2mat(adot, x)
+#   asigsqmat <- swot_vec2mat(sigsq_a, x)
+#   
+#   priormu <- - 5 / 3 * ahat + bi$logQ_hat + bi$logn_hat
+#   priorsigsq <- (5 / 3 * bi$logA0_sd)^2 + (bi$logQ_sd)^2 + (bi$logn_sd)^2
+#   
+#   likmu <- as.vector(x)
+#   liksigsq <- (sd(x))^2
+#   
+#   rhsvec <- rnorm()
+# }
+
+sample_qn <- function() {
+  logA <- log(swot_A(A0, bi$dAobs, "median"))
+  
+  priormu <- qbar + n
+  priorsigsq <- sigsq_q
+  
+  likmu <- apply(x + 5 / 3 * logA, 2, mean)
+  liksigsq <- sigsq_epsilon
+  likn <- n_x
+  
+  muqn <- postmu(primu = priormu, 
+                 prisigsq = priorsigsq,
+                 likmu = likmu, 
+                 liksigsq = liksigsq, n = likn)
+  sigsqqn <- postsigsq(prisigsq = priorsigsq,
+                       liksigsq = liksigsq, n = likn)
+  out <- rnorm(n_t, muqn, sqrt(sigsqqn))
+  out
+}
+
+sample_qbar <- function() {
+  logA <- log(swot_A(A0, bi$dAobs, "median"))
+  
+  priormu <- bi$logQ_hat
+  priorsigsq <- (bi$logQ_sd)^2
+  
+  likmu <- mean(qn) - n
+  liksigsq <- sigsq_q
+  likn <- n_t
+  
+  muqbar <- postmu(primu = priormu, 
+                  prisigsq = priorsigsq,
+                  likmu = likmu, 
+                  liksigsq = liksigsq, n = likn)
+  sigsqqbar <- postsigsq(prisigsq = priorsigsq,
+                         liksigsq = liksigsq, n = likn)
+  
+  out <- rnorm(1, muqbar, sqrt(sigsqqbar))
+  out
+}
+
+# sample_qt <- function() {
+#   logA <- log(swot_A(A0, bi$dAobs, "median"))
+#   muq <- postmu(primu = qbar, prisigsq = sigsq_q, 
+#                 likmu = apply(x + 5 / 3 * logA - n, 2, mean), 
+#                 liksigsq = sigsq_epsilon, n = n_x)
+#   sigsqq <- postsigsq(prisigsq = sigsq_q, liksigsq = sigsq_epsilon, n = n_x)
+#   
+#   out <- rnorm(n_t, muq, sqrt(sigsqq))
+#   out
+# }
+
+sample_n <- function() {
+  logA <- log(swot_A(A0, bi$dAobs, "median"))
+  
+  priormu <- bi$logn_hat
+  priorsigsq <- bi$logn_sd
+  
+  likmu <- mean(qn - qbar)
+  liksigsq <- sigsq_q
+  likn <- n_t
+  
+  mun <- postmu(primu = priormu, 
+                prisigsq = priorsigsq,
+                likmu = likmu, 
+                liksigsq = liksigsq, n = likn)
+  sigsqn <- postsigsq(prisigsq = priorsigsq,
+                      liksigsq = liksigsq, n = likn)
+  
+  out <- rnorm(1, mun, sqrt(sigsqn))
+  out
+}
+
+# sample_abar <- function() {
+#   qmat <- swot_vec2mat(q, x)
+#   abarsigsq <- sd(log(swot_A(A0vec = A0, dAmat = bi$dAobs)))^2 # TODO: check this
+# 
+#   priormu <- mean(bi$logA0_hat)
+#   priorsigsq <- (bi$logA0_sd)^2 # TODO: make this less conservative
+# 
+#   likmu <- mean(qmat + n - x)
+#   liksigsq <- (3 / 5)^2 * sigsq_epsilon + abarsigsq
+#   likn <- n_x * n_t
+# 
+#   muabar <- postmu(primu = priormu,
+#                   prisigsq = priorsigsq,
+#                   likmu = likmu,
+#                   liksigsq = liksigsq, n = likn)
+#   sigsqabar <- postsigsq(prisigsq = priorsigsq,
+#                          liksigsq = liksigsq, n = likn)
+#   out <- rnorm(1, muabar, sqrt(sigsqabar))
+#   out
+# }
+# 
+# sample_adot <- function() {
+#   qmat <- swot_vec2mat(q, x)
+#   adotsigsq <- apply(log(swot_A(A0vec = A0, dAmat = bi$dAobs)), 1, var)
+# 
+#   priormu <- abar
+#   priorsigsq <- var(bi$logA0_hat)
+# 
+#   likmu <- apply(qmat + n - x, 1, mean)
+#   liksigsq <- (3 / 5)^2 * sigsq_epsilon + adotsigsq
+#   likn <- n_t
+# 
+#   mupost <- postmu(primu = priormu,
+#                   prisigsq = priorsigsq,
+#                   likmu = likmu,
+#                   liksigsq = liksigsq, n = likn)
+#   sigsqpost <- postsigsq(prisigsq = priorsigsq,
+#                          liksigsq = liksigsq, n = likn)
+#   out <- rnorm(n_x, mupost, sqrt(sigsqpost))
+#   out
+# }
+# 
+# sample_a <- function() {
+#   qmat <- swot_vec2mat(q, x)
+# 
+#   priormumat <- swot_vec2mat(adot, x)
+#   priorsigsq <- asigsq
+#   priormu <- as.vector(priormumat)
+# 
+#   likmu <- as.vector(qmat + n - x)
+#   liksigsq <- (3 / 5)^2 * sigsq_epsilon
+#   likn <- 1
+# 
+#   mupost <- postmu(primu = priormu,
+#                   prisigsq = priorsigsq,
+#                   likmu = likmu,
+#                   liksigsq = liksigsq, n = likn)
+#   sigsqpost <- postsigsq(prisigsq = priorsigsq,
+#                          liksigsq = liksigsq, n = likn)
+# 
+#   # Lower bound on a is based on dA.
+#   minmat <- log(rezero_dA(bi$dAobs, zero = "minimum"))
+#   minvec <- as.vector(minmat)
+# 
+#   outvec <- rtruncnorm(n_x * n_t, a = minvec, b = Inf,
+#                        mean = mupost, sd = sqrt(sigsqpost))
+#   out <- matrix(outvec, nrow = n_x)
+#   out
+# }
+
+sample_A0 <- function() {
+  
+  # Sample the matrix of a = logA
+  # amat <- sample_a() # This one uses priors in a way I'm not sure is correct.
+  
+  minmat <- 5 / 3 * log(rezero_dA(bi$dAobs, zero = "minimum") + 0.1)
+  minvec <- as.vector(minmat)
+  muvec <- as.vector(qn - x)
+  a53vec <- rtruncnorm(n_x * n_t, a = minvec, b = Inf, 
+                       mean = muvec, sd = sqrt(sigsq_epsilon))
+  amat <- matrix(a53vec * 3 / 5, nrow = n_x)
+  A0est <- exp(amat) - bi$dAobs
+  
+  priormu <- bi$logA0_hat
+  priorsigsq <- (bi$logA0_sd)^2
+  
+  likmu <- apply(log(A0est), 1, mean)
+  # likcvs <- apply(bi$dAerr_sd / swot_A(A0, bi$dAobs, zero = "median"), 1, mean)
+  # liksigsq <- (bamr:::cv2sigma(likcvs))^2
+  liksigsq <- (3 / 5)^2 * sigsq_epsilon
+  likn <- n_t
+    
+  mupost <- postmu(primu = priormu,
+                  prisigsq = priorsigsq,
+                  likmu = likmu,
+                  liksigsq = liksigsq, n = likn)
+  sigsqpost <- postsigsq(prisigsq = priorsigsq,
+                         liksigsq = liksigsq, n = likn)
+  
+  out <- exp(rnorm(n_x, mean = mupost, sd = sqrt(sigsqpost)))
+  out
+}
+
+# sample_sigsq_a <- function() {
+#   logA <- log(swot_A(A0, bi$dAobs, zero = "median"))
+#   avecs <- as.data.frame(t(logA))
+#   
+#   alpha <- postalpha(prialpha = 3, n = n_t) # priors based on mu, sd = 0.3, 0.3
+#   beta <- map2_dbl(avecs, adot, ~postbeta(pribeta = 0.6, y = .x, mu = .y))
+#   
+#   drawgamma <- rgamma(n_x, shape = alpha, rate = beta)
+#   out <- 1 / drawgamma
+#   out
+# }
+
+sample_sigsq_epsilon <- function() {
+  qnmat <- swot_vec2mat(qn, x)
+  logA <- log(swot_A(A0, bi$dAobs, zero = "median"))
+  errmat <- qnmat - 5 / 3 * logA - x
+  errvec <- as.vector(errmat)
+  
+  alpha <- postalpha(prialpha = 2, n = n_x * n_t)
+  beta <- postbeta(pribeta = 0.01, y = errvec, mu = 0)
+  
+  drawgamma <- rgamma(1, shape = alpha, rate = beta)
+  out <- 1 / drawgamma
+  out
+}
+
+# sample_dgdx <- function() {
+#   qmat <- swot_vec2mat(q, x)
+#   logA <- log(swot_)
+# }
+
+```
+
+Get ready for sampling. 
+
+```{r}
+# Sampler settings
+numchains <- 3
+niter <- 2000
+
+# Specify known quantities
+bdat <- swot_bamdata(reachdata$Po)
+# synthcase <- synth_new()
+# bdat <- swot_bamdata(synthcase$swotlist)
+
+bi <- bamr:::compose_bam_inputs(bdat)
+bi$dAobs <- rezero_dA(bi$dAobs, zero = "median")
+x <- -2 / 3 * log(bi$Wobs) + 1 / 2 * log(bi$Sobs)
+n_x <- nrow(x)
+n_t <- ncol(x)
+A0_min <- -apply(bi$dAobs, 1, min)
+
+# Initialize parameters
+A0 <- A0_min + runif(n_x, 0, 0.001)
+# abar <- -10
+qn <- rep(-10, n_t)
+# q <- rep(-10, n_t)
+qbar <- -10
+sigsq_epsilon <- 1e-5
+sigsq_q <- 1
+n <- -10
+dgdx <- rep(0, n_t)
+nuhat <- rep(0, n_x)
+
+
+# Allocate chains
+
+# abarchain <- numeric(niter)
+# adotchain <- map(1:niter, ~numeric(n_x))
+A0chain <- map(1:niter, ~numeric(n_x))
+# qchain <- map(1:niter, ~numeric(n_t))
+qnchain <- map(1:niter, ~numeric(n_t))
+qbarchain <- numeric(niter)
+ssqep_chain <- numeric(niter)
+ssqq_chain <- numeric(niter)
+nchain <- numeric(niter)
+```
+
+
+That's all for setup. Now sample.
+
+```{r}
+
+printint <- 100
+# for (i in 1:200) {
+for (i in 1:niter) {
+  
+  # cat(".")
+  if (i %% printint == 0) {
+    cat(i, "\n")
+  }
+  
+  # sample qbar
+  qbar <- sample_qbar()
+  qbarchain[i] <- qbar
+  
+  # # sample q_t
+  # q <- sample_qt()
+  # qchain[[i]] <- q
+  
+  # sample qn
+  qn <- sample_qn()
+  qnchain[[i]] <- qn
+  
+  # sample n
+  n <- sample_n()
+  nchain[i] <- n
+  
+  # Calculate q
+  q <- qn - n
+  qchain[[i]] <- q
+  
+  # # sample abar (global mean)
+  # abar <- sample_abar()
+  # abarchain[i] <- abar
+  # 
+  # # sample adot (location mean)
+  # adot <- sample_adot()
+  # adotchain[[i]] <- adot
+  # 
+  # # sample asigsq (at-a-location area variance)
+  # asigsq <- sample_sigsq_a()
+  
+  # sample A0
+  A0 <- sample_A0()
+  A0chain[[i]] <- A0
+  
+  # sample sigma_epsilon
+  sigsq_epsilon <- sample_sigsq_epsilon()
+  ssqep_chain[i] <- sigsq_epsilon
+}
+```
+
+Now check out the posterior
+
+```{r}
+# get posterior stats
+hist(nchain)
+hist(qbarchain)
+
+A0df <- A0chain[-1:-1000] %>% 
+  map(~setNames(., 1:n_x)) %>% 
+  map(~as.data.frame(as.list(.))) %>% 
+  bind_rows(.id = "iter") %>% 
+  gather(key = loc, value = value, -iter)
+
+A0df %>% 
+  spread(key = loc, value = value) %>% 
+  select(X1, X2:X5) %>% 
+  pairs()
+
+realA0df <- data.frame(loc = paste0("X", 1:n_x),
+                       value = realA0(reachdata$Po, zero = "median"))
+minA0df <- data.frame(loc = paste0("X", 1:n_x),
+                      value = -apply(reachdata$Po$dA, 1, min))
+priorA0df <- data.frame(loc = paste0("X", 1:n_x),
+                        value = exp(bi$logA0_hat))
+
+A0df %>% 
+  ggplot(aes(x = loc, y = value)) + 
+  geom_violin() +
+  geom_point(data = realA0df) + 
+  geom_point(data = minA0df, shape = 2) + 
+  geom_point(data = priorA0df, shape = 3)
+  
+
+
+```
+
+Now compare to bamr method.
+
+```{r}
+library(bamr)
+bamest <- bam_estimate(bdat, variant = "manning")
+
+bam_hydrograph(bamest, qreal)
+```
+
+
+I think this is working!
+
+```{r}
+qcsamps <- qchain[-1:-1000] %>% 
+  Reduce(rbind, x = .)
+
+qmeans <- apply(exp(qcsamps), 2, mean)
+qhi <- apply(exp(qcsamps), 2, quantile, probs = 0.95)
+qlo <- apply(exp(qcsamps), 2, quantile, probs = 0.05)
+qreal <- apply(reachdata$Po$Q, 2, median)
+
+plot(qmeans, type = "l", ylim = c(0, max(qhi)), lty = 3)
+lines(qhi, lty = 2)
+lines(qlo, lty = 2)
+lines(qreal, lty = 1, col = "red")
+
+RRMSE(qmeans, qreal)
+NRMSE(qmeans, qreal)
+rBIAS(qmeans, qreal)
+```
+
+Now turn it into a function.
+
+```{r}
+mcman_gibbs <- function(baminps) {
+  
+}
+```
+

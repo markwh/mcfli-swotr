@@ -4,6 +4,7 @@
 .Ruserdata
 cache
 *.pdf
+*.odt
 *.png
 *.html
 lisflood/*

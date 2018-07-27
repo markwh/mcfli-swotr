@@ -69,7 +69,8 @@ batman_A0priorfun <- function(Wmat) {
   }
 }
 
-batman_log <- function(swotlist, steptol = 1e-12, gradtol = 1e-12, ...) {
+batman_log <- function(swotlist, steptol = 1e-12, gradtol = 1e-12, 
+                       lambda = 0, ...) {
   W <- swotlist$W
   dA <- swotlist$dA
   S <- swotlist$S
@@ -89,7 +90,7 @@ batman_log <- function(swotlist, steptol = 1e-12, gradtol = 1e-12, ...) {
     logQnmat <- swot_vec2mat(logQn, dA)
     
     objmat <- (X + 5/3 * log(A) - logQnmat)^2
-    obj <- sum(objmat)
+    obj <- sum(objmat) + lambda * sqrt(A0 %*% A0)
     
     obj
   }
@@ -106,7 +107,7 @@ batman_log <- function(swotlist, steptol = 1e-12, gradtol = 1e-12, ...) {
     dlogQnmat <- -2 * (X + 5/3 * log(A) - logQnmat)
     dlogQnvec <- apply(dlogQnmat, 2, sum)
     
-    out <- c(dlogAvec, dlogQnvec)
+    out <- c(dlogAvec, dlogQnvec) + lambda / 2 * pars
   }
   attr(objfun, "gradient") <- gradfun  
   

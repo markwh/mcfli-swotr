@@ -1,0 +1,139 @@
+---
+title: "lisflood-latinflows"
+author: "Mark Hagemann"
+date: "July 10, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(swotr)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+opts_chunk$set(echo = TRUE)
+
+theme_set(theme_bw())
+```
+
+
+
+```{r}
+source("../../lib/lisflood.R")
+dirs <- paste0(list.dirs("../../../lisflood/toy_1/lat-inflows", 
+                         recursive = FALSE), "/results")
+dirnames <- list.dirs("../../../lisflood/toy_1/lat-inflows", 
+                         recursive = FALSE, full.names = FALSE)
+
+reslist <- map(dirs, ~lis_reaches(lis_profiles(.)))
+
+resdf <- reslist %>% 
+  setNames(dirnames) %>% 
+  bind_rows(.id = "run") %>% 
+  filter(loc != 4)
+
+resdf %>% 
+  ggplot(aes(x = time, y = Q, color = loc, group = loc)) +
+  geom_line() + 
+  facet_wrap(~run, scales = "free_y")
+```
+
+Here's a brief summary of some recent work exploring the impact of lateral inflows on MetroMan inversions. For this we used the unit-hydrograph lisflood case described in a [previous post](https://swotdawg.wordpress.com/2018/05/21/variable-slope-simple-mcfli/), modified to add a constant Q between reaches 2 and 3. The hydrograph, width, slope, and height time series for the unmodified (no lateral inflow) case are as follows:
+
+```{r}
+resdf %>% 
+  filter(run == "lat-000", time > 40) %>% 
+  select(-run) %>% 
+  swot_untidy() %>% 
+  swot_plot(vars = c("Q", "W", "S", "H"))
+
+ggsave("fig/orig_ts.png")
+
+```
+
+Initially we generated 7 cases with lateral inflow of 0.05, 0.1, 0.25, 0.5, 1, 2.5, and 5 cms, corresponding to between 0.1% and 10% of the original 50 cms baseflow. Height and discharge time series for reach 3 (the only reach affected by lateral inflows) are as follows:
+
+```{r}
+oldnames <- c("lat-000", "lat-005", "lat-010", "lat-025", "lat-050", "lat-100", 
+"lat-1000", "lat-10000", "lat-2000", "lat-250", "lat-500", "lat-5000")
+newnames <- gsub("lat-", "", oldnames, fixed = TRUE) 
+
+resdf %>% 
+  filter(run %in% c("lat-005", "lat-010", "lat-025", 
+                    "lat-050", "lat-100", "lat-250", "lat-500"),
+         time > 40, loc == 3) %>% 
+  mutate(Q_in = as.numeric(plyr::mapvalues(run, from = oldnames, 
+                                           to = newnames)) / 100,
+         Q_in = as.factor(Q_in)) %>% 
+  select(time, Q_in, H, Q) %>% 
+  gather(key = variable, value = value, -time, -Q_in) %>%  glimpse() %>% 
+  ggplot(aes(x = time, y = value, color = Q_in, group = Q_in)) + 
+  geom_line() + 
+  facet_wrap(~variable, scales = "free_y")
+  
+ggsave("fig/cases1_hq.png")
+```
+
+MetroMan performed remarkably well on these cases, with the worst case TODO
+
+Next we generated 4 more extreme cases with lateral inflows of 10, 20, 50, and 100 cms--that's between 20% and 200% of original baseflow. Here are the hydrographs and height time series from reach 3 for these scenarios.
+
+```{r}
+resdf %>% 
+  filter(run %in% c("lat-1000", "lat-2000", "lat-5000", "lat-10000"),
+         time > 40, loc == 3) %>% 
+  mutate(Q_in = as.numeric(plyr::mapvalues(run, from = oldnames, 
+                                           to = newnames)) / 100,
+         Q_in = as.factor(Q_in)) %>% 
+  select(time, Q_in, H, Q) %>% 
+  gather(key = variable, value = value, -time, -Q_in) %>%  glimpse() %>% 
+  ggplot(aes(x = time, y = value, color = Q_in, group = Q_in)) + 
+  geom_line() + 
+  facet_wrap(~variable, scales = "free_y")
+
+ggsave("fig/cases2_hq.png")
+```
+
+For context, here is the full dataset (all 3 reaches) for the largest of these inflows.
+
+```{r}
+resdf %>% 
+  filter(run == "lat-10000", time > 40) %>% 
+  select(-run) %>% 
+  swot_untidy() %>% 
+  swot_plot(vars = c("Q", "W", "S", "H"))
+
+ggsave("fig/biggest_ts.png")
+```
+
+Here are some profiles of what height is doing downstream.
+
+```{r}
+dirs <- paste0(list.dirs("../../../lisflood/toy_1/lat-inflows", 
+                         recursive = FALSE), "/results")
+dirnames <- list.dirs("../../../lisflood/toy_1/lat-inflows", 
+                         recursive = FALSE, full.names = FALSE)
+
+profdf <- map(dirs, ~lis_profiles(.)) %>% 
+  setNames(dirnames) %>% 
+  bind_rows(.id = "run") %>% 
+  mutate(Q_in = plyr::mapvalues(run, oldnames, as.numeric(newnames) / 100),
+         Q_in = factor(Q_in, levels = sort(as.numeric(newnames) / 100)))
+
+profdf %>% 
+  filter(profile %in% c("0040", "0060", "0077"), 
+         ChanX <= 30000) %>% 
+  mutate(time = plyr::mapvalues(profile, 
+                                from = c("0040", "0060", "0077"),
+                                to = c("steady", "rising", "falling")),
+         time = factor(time, levels = c("steady", "rising", "falling"))) %>% 
+  select(ChanX, Flow, Q_in, time) %>% 
+  ggplot(aes(x = ChanX, y = Flow)) + 
+  geom_line(aes(color = Q_in)) + 
+  facet_wrap(~time, nrow = 3, scales = "free_y") +
+  xlab("Downstream distance (m)")
+
+ggsave("fig/q_x.png", width = 5, height = 6)  
+```
+
