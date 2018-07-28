@@ -1,0 +1,159 @@
+---
+title: "A0 comparison"
+author: "Mark Hagemann"
+date: "July 27, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I now have 4 ways of estimating A0. Two are Bayesian algorithms (bmar and gibbs), and two are optimization (linear model and nlm). This post will compare them using the Pepsi 1 datasets and lisflood cases. 
+
+
+### datasets
+
+```{r}
+testcases <- c(reachdata[1:15], list(uscase = uscase, sscase = sscase)) %>% 
+  map(~within(., {dA = rezero_dA(dA, zero = "median")}))
+```
+
+
+### bamr inversions
+
+I am using the median_A0 version of bamr (still needs version bump!). 
+
+```{r}
+library(bamr)
+library(rstan)
+bamests <- testcases %>% 
+  map(~swot_bamdata(.)) %>% 
+  map(possibly(~bam_estimate(., bampriors = bam_priors(., logA0_sd = 0.5, logn_sd = 0.25),
+                             variant = "manning"), otherwise = NA), iter = 2000)
+
+
+```
+
+```{r}
+relsd <- function(...) {
+  mat <- Reduce(cbind, list(...))
+  out <- apply(mat, 1, function(x) sd(x / x[1]))
+  out
+}
+bam_A0 <- bamests %>% 
+  map(~get_posterior_mean(., pars = "A0")) %>% 
+  map(as.data.frame) %>% 
+  bind_rows(.id = "case") %>% 
+  setNames(c("case", "chain1", "chain2", "chain3", "allchains")) %>% 
+  mutate(converged = relsd(chain1, chain2, chain3) < 0.05) %>% 
+  transmute(case, A0 = allchains, converged)
+```
+
+### gibbs inversions
+
+```{r}
+
+gsprint <- function(inputs, name) {
+  print(name)
+  gibbs_sample(inputs, chains = 3, iter = 4000)
+}
+gibbsests <- testcases %>% 
+  map(~gibbs_inputs(.)) %>% 
+  map2(names(.), possibly(~gsprint(.x, .y), otherwise = NA))
+```
+
+Some of them did not work.
+
+```{r}
+gibbsests$Cumberland
+inps1 <- gibbs_inputs(testcases$Cumberland)
+init1 <- gibbs_init_rand(inps1)
+foo <- gibbs_sample(inps1, chains = 3, iter = 1000)
+```
+
+
+```{r}
+gibbsests_sf <- map(gibbsests, gibbs_stanfit)
+gibbs_A0 <- gibbsests_sf %>% 
+  map(~get_posterior_mean(., pars = "A0")) %>% 
+  map(as.data.frame) %>% 
+  bind_rows(.id = "case") %>% 
+  setNames(c("case", "chain1", "chain2", "chain3", "allchains")) %>% 
+  mutate(converged = relsd(chain1, chain2, chain3) < 0.05) %>% 
+  transmute(case, A0 = allchains, converged)
+
+gibbsests_sf$Connecticut %>% stan_trace(pars = "A0")
+gibbsests_sf$GaronneUpstream %>% stan_trace(pars = "A0", inc_warmup = TRUE)
+gibbsests_sf$MississippiUpstream %>% stan_trace(pars = "A0") # real bad
+gibbsests_sf$Seine %>% stan_trace(pars = "A0")
+```
+
+
+### Linear model
+
+```{r}
+lmests <- testcases %>% 
+  map(~swot_purge_nas(.)) %>% 
+  map(~estA0(.))
+
+lm_A0 <- lmests %>% 
+  map(~data.frame(A0 = .)) %>% 
+  bind_rows(.id = "case") %>% 
+  transmute(case, A0, converged = TRUE)
+```
+
+
+### Nonlinear model
+
+```{r}
+nlmests <- testcases %>% 
+  map(~swot_purge_nas(.)) %>% 
+  map(~batman_log(., iterlim = 1000))
+
+nlm_A0 <- nlmests %>% 
+  map(~data.frame(A0 = .$A0, code = .$code)) %>% 
+  bind_rows(.id = "case") %>% 
+  transmute(case, A0, converged = code < 4)
+```
+
+```{r}
+nlm_A0 %>% 
+  ggplot(aes(x = case, y = A0)) + 
+  geom_point() + 
+  scale_y_log10()
+```
+
+
+## Comparison
+
+```{r}
+A0df <- list(bam = bam_A0, gibbs = gibbs_A0, lm = lm_A0, nlm = nlm_A0) %>% 
+  bind_rows(.id = "method") %>% 
+  group_by(case, method) %>% 
+  mutate(reach = 1:n()) %>% 
+  ungroup()
+
+realA0s <- map(testcases, ~data.frame(A0_med = realA0(., zero = "median"), 
+                                      A0_min = realA0(., zero = "minimum"))) %>% 
+  bind_rows(.id = "case") %>% 
+  group_by(case) %>% 
+  mutate(reach = 1:n(), 
+         dA_shift = A0_med - A0_min)
+
+valdf <- left_join(A0df, realA0s, by = c("case", "reach")) %>% 
+  mutate(A0 = ifelse(method == "bam", A0_med - A0_min + A0, A0))
+
+valdf %>% 
+  group_by(method) %>% 
+  summary()
+
+valdf %>% 
+  ggplot(aes(x = A0, y = A0_med)) + 
+  geom_point(aes(color = case)) + 
+  facet_wrap(~method) + 
+  scale_x_log10() + scale_y_log10() + 
+  geom_abline(slope = 1, intercept = 0)
+  
+```
+

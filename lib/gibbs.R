@@ -7,11 +7,13 @@ gibbs_inputs <- function(swotlist, Qhat = NULL) {
   bi <- bamr:::compose_bam_inputs(bdat)
   bi$logQ_hat <- mean(bi$logQ_hat)
   bi$logQ_sd <- mean(bi$logQ_sd)
+  bi$logn_sd <- 0.25
+  bi$logA0_sd <- 0.5
   bi$dAobs <- rezero_dA(bi$dAobs, zero = "median")
   ws <- -2 / 3 * log(bi$Wobs) + 1 / 2 * log(bi$Sobs)
   A0_min <- -apply(bi$dAobs, 1, min)
-  dx <- findif_x(swotlist$x)
-  deltax <- swotlist$x - mean(swotlist$x)
+  dx <- findif_x(swotlist$x)[, 1:bi$nt]
+  deltax <- (swotlist$x - mean(swotlist$x))[, 1:bi$nt]
   
   out <- c(bi, list(ws = ws, A0_min = A0_min, dx = dx, deltax = deltax))
   out
@@ -105,6 +107,7 @@ gibbs_inits <- function(inputs, chains, method = "rand") {
 
 # Sampler utility functions ------------------------
 postmu <- function(primu, prisigsq, likmu, liksigsq, n) {
+  B <- liksigsq 
   mu <- (liksigsq * primu + n * prisigsq * likmu) / (n * prisigsq + liksigsq)
   mu
 }
@@ -345,7 +348,7 @@ gibbs_sample_chain <- function(inputs, inits, iter, thin = 1,
                           optional = TRUE) %>% 
     as.matrix()
   qnchain <- as.data.frame(map(1:nt, ~numeric(iter)),
-                           col.names = sprintf("qn[%s]", 1:nt),
+                           col.names = sprintf("logQn[%s]", 1:nt),
                            optional = TRUE) %>% 
     as.matrix()
   qbarchain <- numeric(iter)
@@ -439,6 +442,7 @@ gibbs_sample_chain <- function(inputs, inits, iter, thin = 1,
     A0 = as.data.frame(A0chain),
     logn = nchain,
     logQ = as.data.frame(qchain),
+    logQn = as.data.frame(qnchain),
     logQbar = qbarchain,
     sigsq_epsilon = ssqep_chain,
     sigsq_q = ssqq_chain,

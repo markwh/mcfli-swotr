@@ -96,26 +96,28 @@ is_ss <- function(...) {
   out
 }
 
-sscase <- lis_profiles("lisflood/toy_1/results_const_v2/") %>% 
-  lis_reaches(slope_method = "s_median", agfun = median) %>% 
-  filter(loc != 4) %>%
-  arrange(loc, time) %>% 
-  group_by(loc) %>% 
-  mutate(steady = is_ss(W, S, Q, H, D)) %>% 
-  group_by(time) %>% 
-  filter(sum(steady) == 3) %>% 
-  group_by(Q) %>% 
-  filter(time == time[1]) %>% 
-  mutate(A = W * D) %>% 
-  select(-steady) %>% 
-  swot_untidy()
+# sscase <- lis_profiles("lisflood/toy_1/results_const_v2/") %>% 
+#   lis_reaches(slope_method = "s_median", agfun = median) %>% 
+#   filter(loc != 4) %>%
+#   arrange(loc, time) %>% 
+#   group_by(loc) %>% 
+#   mutate(steady = is_ss(W, S, Q, H, D)) %>% 
+#   group_by(time) %>% 
+#   filter(sum(steady) == 3) %>% 
+#   group_by(Q) %>% 
+#   filter(time == time[1]) %>% 
+#   mutate(A = W * D) %>% 
+#   select(-steady) %>% 
+#   swot_untidy()
+attr(sscase, "QWBM") <- 120 # Fake QWBM to ease bam etc estimation
 
-uscase <- lis_profiles("lisflood/toy_1/results_simple_v2/") %>% 
-  lis_reaches(slope_method = "s_mean", agfun = mean) %>% 
-  filter(loc != 4) %>%
-  mutate(A = W * D) %>% 
-  swot_untidy() %>% 
-  swot_sset(keeptimes = -1:-20)
+# uscase <- lis_profiles("lisflood/toy_1/results_simple_v2/") %>% 
+#   lis_reaches(slope_method = "s_mean", agfun = mean) %>% 
+#   filter(loc != 4) %>%
+#   mutate(A = W * D) %>% 
+#   swot_untidy() %>% 
+#   swot_sset(keeptimes = -1:-20)
+attr(uscase, "QWBM") <- 120 # Fake QWBM to ease bam etc estimation
 
 cache("sscase")
 cache("uscase")
