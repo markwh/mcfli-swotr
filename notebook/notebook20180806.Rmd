@@ -1,0 +1,252 @@
+---
+title: "notebook20180806"
+author: "Mark Hagemann"
+date: "August 6, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Today I'm tracking down the discrpencies between gibbs results and BAM results. 
+
+## Normal-normal model, known variance
+
+First, compare normal-normal posterior for my gibbs vs. stan.
+
+```{stan output.var = "testcase"}
+data {
+  vector[10] x;
+  real muhat;
+  real sigsq;
+  real musd;
+}
+
+parameters {
+  real mu;
+}
+
+model {
+  x ~ normal(mu, sqrt(sigsq));
+  mu ~ normal(muhat, musd);
+}
+
+```
+
+```{r}
+library(rstan)
+
+testdata <- list(x = rnorm(10, 10, 1),
+                 muhat = 3,
+                 musd = 1,
+                 sigsq = 1)
+post_stan <- sampling(testcase, data = testdata, cores = 3)
+
+stan_trace(post_stan)
+
+```
+
+```{r}
+mu_post <- postmu(primu = testdata$muhat, prisigsq = testdata$musd^2, 
+                 likmu = mean(testdata$x), liksigsq = testdata$sigsq, n = 10)
+ssq_post <- postsigsq(prisigsq = testdata$musd^2, liksigsq = testdata$sigsq, n = 10)
+
+plot(rnorm(1000, mu_post, sqrt(ssq_post)), type = "l")
+```
+
+That much is good. Now try a prior on sigsq.
+
+## Normal-gamma model
+
+
+```{stan output.var = "testcase2"}
+data {
+  int nx;
+  vector[nx] x;
+  real muhat;
+  //real sigsq;
+  real musd;
+  real alpha;
+  real beta;
+}
+
+parameters {
+  real mu;
+  real prec;
+}
+
+transformed parameters {
+  real sigma;
+  sigma = sqrt(1 / prec);
+}
+
+model {
+  x ~ normal(mu, sigma);
+  mu ~ normal(muhat, musd);
+  prec ~ gamma(alpha, beta);
+}
+```
+
+```{r}
+invgam_mom(mean = 1, sd = 10)
+hist(1 / sqrt(rgamma(10000, shape = 2.01, rate = 1.01)))
+
+nx <- 30
+testdata <- list(nx = nx, 
+                 x = rnorm(nx, 10, 1),
+                 muhat = 3,
+                 musd = 10,
+                 # sigsq = 1,
+                 alpha = 2.01,
+                 beta = 1.01)
+post_stan <- sampling(testcase2, data = testdata, cores = 3,
+                      control = list(adapt_delta = 0.99))
+```
+
+```{r}
+pairs(post_stan)
+stan_trace(post_stan, inc_warmup = TRUE)
+stan_trace(post_stan, inc_warmup = FALSE)
+stan_trace(post_stan, inc_warmup = FALSE, pars = "sigma")
+
+stan_hist(post_stan)
+summary(post_stan)$summary
+
+```
+
+```{r}
+niter <- 10000
+
+inits <- list(
+  mu = 0, 
+  prec = 0.01
+)
+
+precchain <- sigmachain <- muchain <- numeric(niter)
+
+state <- inits
+for (i in 1:niter) {
+  cat(".")
+  if (i %% 100 == 0) 
+    cat(i, "\n")
+  state$mu <- sample_normal(priormu = testdata$muhat, priorsigsq = (testdata$musd)^2, 
+                            likmu = mean(testdata$x), liksigsq = 1 / state$prec, 
+                            likn = testdata$nx)
+  muchain[i] <- state$mu
+  state$prec <- rgamma(1, shape = postalpha(prialpha = testdata$alpha, n = testdata$nx),
+                         rate = postbeta(pribeta = testdata$beta, y = testdata$x, state$mu))
+  precchain[i] <- state$prec
+  sigmachain[i] <- 1 / sqrt(state$prec)
+}
+
+plot(muchain[-1:-5000], type = "l")
+plot(sigmachain[-1:-5000], type = "l")
+
+hist(sigmachain[-1:-5000])
+hist(precchain[-1:-5000])
+
+summary(post_stan)$summary
+summary(data.frame(mu = muchain[-1:-5000], 
+                   prec = precchain[-1:-5000], 
+                   sigma = sigmachain[-1:-5000]))
+```
+
+OK, those agree very nicely. Conclusion: Any discrepancies between stan and gibbs vis a vis mcfli are not from my conception of normal-gamma. Instead, they must be either:
+
+- bug in sampling statements, or
+- misstated A0 sampler
+
+The first is easy enough to look for (but may be hard to find). The second would mean that my hand-wavey aggregation of individual A0 estimates is insufficient and I may need to take a metropolis-hastings-in-gibbs approach. Which would be harder. 
+
+## Normal-truncated-normal-gamma model
+
+Now I'll add the A0 and dA terms to the model. But this also requires adding a dimension to the data (akin to space). I'll just use 2 "locations".
+
+The simplest model of this kind I can think of is:
+
+$$
+A_{0,s} + \delta A_{st} \sim logN(\mu_s, \sigma_i) \\
+\mu_s \sim N(\hat{\mu_s}, \sigma_\mu) \\
+\sigma^2_s \sim IG(\alpha, \beta)
+$$
+
+```{stan output.var = "testcase3"}
+data {
+  int ns;
+  int nt;
+  //vector[nx] x[2];
+  vector[nt] dA[ns];
+  vector[ns] muhat;
+  //real sigsq;
+  real musd;
+  real alpha;
+  real beta;
+}
+
+parameters {
+  vector[ns] mu;
+  vector<lower=0>[ns] A0;
+  real prec;
+}
+
+transformed parameters {
+  //vector[nx] A[2]; 
+  real sigma;
+  
+  sigma = sqrt(1 / prec);
+}
+
+model {
+  // x ~ normal(mu, sigma);
+  
+  for (i in 1:ns) {
+    A0[i] + dA[i] ~ lognormal(mu[i], sigma);
+  }
+  
+  mu ~ normal(muhat, musd);
+  prec ~ gamma(alpha, beta);
+}
+```
+
+```{r}
+invgam_mom(mean = mean(rnorm(1000, 0.5, 0.5)^2), 
+           sd = sd(rnorm(1000, 0.5, 0.5)^2))
+hist(1 / sqrt(rgamma(10000, shape = 2.69, rate = 0.85)))
+
+ns <- 4
+nt <- 30
+musd <- 0.5
+muhat <- rnorm(ns, 3, 1)
+mu <- rnorm(ns, muhat, musd)
+alpha <- 2.69
+beta <- 0.85
+prec <- rgamma(ns, shape = alpha, rate = beta)
+
+testdata <- within(list(
+  ns = ns, 
+  nt = nt,
+  A = setNames(map2(mu, prec, ~rlnorm(nt, .x, 1 / sqrt(.y))), 1:ns),
+  muhat = muhat,
+  musd = musd,
+  alpha = alpha,
+  beta = beta
+  ), {
+    A0 = sapply(A, min)
+    dA = t(as.data.frame(A, optional = TRUE)) - 
+      matrix(rep(A0, nt), nrow = ns, byrow = FALSE)
+  })
+post_stan <- sampling(testcase3, data = testdata, cores = 3,
+                      control = list(adapt_delta = 0.99))
+```
+
+```{r}
+pairs(post_stan)
+stan_trace(post_stan, inc_warmup = TRUE)
+stan_trace(post_stan, inc_warmup = FALSE)
+stan_trace(post_stan, inc_warmup = FALSE, pars = "sigma")
+
+stan_hist(post_stan)
+summary(post_stan)$summary
+```
+
