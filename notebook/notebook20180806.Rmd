@@ -159,7 +159,7 @@ OK, those agree very nicely. Conclusion: Any discrepancies between stan and gibb
 
 The first is easy enough to look for (but may be hard to find). The second would mean that my hand-wavey aggregation of individual A0 estimates is insufficient and I may need to take a metropolis-hastings-in-gibbs approach. Which would be harder. 
 
-## Normal-truncated-normal-gamma model
+## Truncated lognormal-normal-gamma model
 
 Now I'll add the A0 and dA terms to the model. But this also requires adding a dimension to the data (akin to space). I'll just use 2 "locations".
 
@@ -187,21 +187,21 @@ data {
 parameters {
   vector[ns] mu;
   vector<lower=0>[ns] A0;
-  real prec;
+  vector<lower=0.01>[ns] prec;
 }
 
 transformed parameters {
   //vector[nx] A[2]; 
-  real sigma;
+  vector<lower=0>[ns] sigma;
   
-  sigma = sqrt(1 / prec);
+  sigma = sqrt(1 ./ prec);
 }
 
 model {
   // x ~ normal(mu, sigma);
   
   for (i in 1:ns) {
-    A0[i] + dA[i] ~ lognormal(mu[i], sigma);
+    A0[i] + dA[i] ~ lognormal(mu[i], sigma[i]);
   }
   
   mu ~ normal(muhat, musd);
@@ -215,7 +215,7 @@ invgam_mom(mean = mean(rnorm(1000, 0.5, 0.5)^2),
 hist(1 / sqrt(rgamma(10000, shape = 2.69, rate = 0.85)))
 
 ns <- 4
-nt <- 30
+nt <- 300
 musd <- 0.5
 muhat <- rnorm(ns, 3, 1)
 mu <- rnorm(ns, muhat, musd)
@@ -236,17 +236,98 @@ testdata <- within(list(
     dA = t(as.data.frame(A, optional = TRUE)) - 
       matrix(rep(A0, nt), nrow = ns, byrow = FALSE)
   })
-post_stan <- sampling(testcase3, data = testdata, cores = 3,
+post_stan <- sampling(testcase3, data = testdata, cores = 3, chains = 3,
                       control = list(adapt_delta = 0.99))
 ```
 
 ```{r}
-pairs(post_stan)
-stan_trace(post_stan, inc_warmup = TRUE)
+pairs(post_stan, pars = "A0")
+stan_trace(post_stan, inc_warmup = TRUE, pars = "lp__")
+testdata$A0
+stan_trace(post_stan, inc_warmup = TRUE, pars = "A0")
+stan_trace(post_stan, inc_warmup = TRUE, pars = "prec")
+
 stan_trace(post_stan, inc_warmup = FALSE)
 stan_trace(post_stan, inc_warmup = FALSE, pars = "sigma")
 
+stan_hist(post_stan, pars = "A0")
+
+
 stan_hist(post_stan)
 summary(post_stan)$summary
+```
+
+
+Can I modify testdata to use estA0?
+
+```{r}
+td_sl <- within(testdata, {
+  W <- matrix(30, nr = nrow(dA), nc = ncol(dA))
+  S <- matrix(0.001, nr = nrow(dA), nc = ncol(dA))
+})
+
+foo <- estA0_lm(td_sl)
+summary(foo)
+foo$model
+
+pairs(foo$model)
+
+bar <- batman_log(td_sl, iterlim = 1000)
+bar$code
+bar$A0
+```
+
+Not well defined! Matrix is rank deficient and max likelihood doesn't converge.
+
+- Seems I need time-varying ws matrix.
+
+## Truncated lognormal-normal model with additional obs
+
+Since the last one was ill-defined (easy to see if you write out the math in the zero-error case), I'll add SWOT-like observations to supplement the dataset. This is getting really close to BAM. RHS can vary in time (but not space). LHS needs additional time- and space-varying observations. Unclear whether $\sigma$ can vary in space.
+
+$$
+(A_{0,s} + \delta A_{st})x_{st} \sim logN(\mu_t, \sigma_i) \\
+\mu_s \sim N(\hat{\mu_s}, \sigma_\mu) \\
+\sigma^2_s \sim IG(\alpha, \beta)
+$$
+
+If this were SWOT data, we could define $x_{st} = W^{-3/5}
+
+```{stan output.var = "testcase4"}
+data {
+  int ns;
+  int nt;
+  //vector[nx] x[2];
+  vector[nt] dA[ns];
+  vector[ns] muhat;
+  //real sigsq;
+  real musd;
+  real alpha;
+  real beta;
+}
+
+parameters {
+  vector[ns] mu;
+  vector<lower=0>[ns] A0;
+  vector<lower=0.01>[ns] prec;
+}
+
+transformed parameters {
+  //vector[nx] A[2]; 
+  vector<lower=0>[ns] sigma;
+  
+  sigma = sqrt(1 ./ prec);
+}
+
+model {
+  // x ~ normal(mu, sigma);
+  
+  for (i in 1:ns) {
+    A0[i] + dA[i] ~ lognormal(mu[i], sigma[i]);
+  }
+  
+  mu ~ normal(muhat, musd);
+  prec ~ gamma(alpha, beta);
+}
 ```
 
