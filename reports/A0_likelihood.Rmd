@@ -1,0 +1,190 @@
+---
+title: "A0 likelihood"
+author: "Mark Hagemann"
+date: "August 8, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Because I keep losing my hand-written derivations, here is the be-all end-all (yeah right) likelihood and posterior for A0, conditional on all other parameters and data. 
+
+This is effectively the same as what `batman_log` uses. 
+
+## Definitions
+
+SWOT observes the dataset $\{x_{st}, \delta A_{st}\}$, where $x_{st} = -\frac{2}{3} \log W_{st} + \frac{1}{2} \log S_{st}$. $s = 1, \dots N$ indexes space and $t = 1 \dots T$ indexes time. Based on Mass-conserved Manning's equation, these data are assumed to be generated according to the following pdf:
+
+$$
+f(x_{st}, \delta A_{st}) = \frac{1}{(A_{0,s} + \delta A_{st}) \sqrt{2  \pi\sigma^2}} \exp\Big(-\frac{1}{2\sigma^2}\big(\log({A_{0,s} + \delta A_{st}}) + \frac{5}{3}x_{st} - \frac{5}{3}\log(q_tn)\big)^2\Big)
+$$
+
+This leads to the following log likelihood for $A_{0,i}$, conditional on all other parameters and data. 
+
+$$
+\ell(A_{0,s} | \delta A_{st}, x_{st}, q_tn, \sigma^2) = - \frac{T}{2\sigma^2} - \sum_{t = 1}^T \Big[\log(A_{0,s} + \delta A_{st}) + \frac{1}{2 \sigma^2} \big(\log({A_{0,s} + \delta A_{st}}) + \frac{5}{3} x_{st} - \frac{5}{3} \log(q_tn)\big)^2 \Big] , \\
+A_{0,s} > -\min_t \delta A_{st}
+$$
+
+If $A_{0,s}$ has a prior distribution with pdf $\pi(A_{0,s})$, then the conditional posterior for $A_{0,s}$ is given by adding $\log \pi(A_{0,s})$ to the above:
+
+$$
+p(A_{0,s} | \delta A_{st}, x_{st}, q_tn, \sigma^2) = - \frac{T}{2\sigma^2} - \sum_{t = 1}^T \Big[\log(A_{0,s} + \delta A_{st}) + \frac{1}{2 \sigma^2} \big(\log({A_{0,s} + \delta A_{st}}) + \frac{5}{3} x_{st} - \frac{5}{3} \log(q_tn)\big)^2 \Big] + \log\pi(A_{0,s}) , \\
+A_{0,s} > -\min_t \delta A_{st}
+$$
+
+## Sampling from the conditional posterior
+
+Because of the funny sum-in-log term, this is difficult if not impossible to sample from directly. Instead we must resort to Metropolis-Hastings. The question is what proposal distribution to use. I propose (hah) the distribution given by the following likelihood $\ell'()$
+
+$$
+A_{0,s}^{(i)} \sim \log N(\frac{5}{3} x_{st} - \frac{5}{3} \log(q_tn), \sigma)
+$$
+
+
+To demonstrate, I'll create an R function to calculate the log conditional posterior for $A_0$. 
+
+```{r}
+# First mcman posterior
+lpfun_mm <- function(swotlist, zero = "same") {
+  logW <- log(swotlist$W)
+  logS <- log(swotlist$S)
+  x <- 1 / 2 * logS - 2 / 3 * logW
+  
+  if (zero != "same") {
+    swotlist$dA <- rezero_dA(swotlist$dA, zero = zero)
+  }
+  
+  out <- function(A0, logqn, sigma) {
+    logA <- log(swot_vec2mat(A0, x) + swotlist$dA)
+    qnmat <- swot_vec2mat(logqn, x)
+    vec <- as.vector(x + 5 / 3 * logA - qnmat)
+    ll <- sum(dnorm(vec, mean = 0, sd = sigma, log = TRUE))
+    ll
+  }
+  out
+}
+
+case <- reachdata$Ganges
+lp_mm <- lpfun_mm(swotlist = case, zero = "minimum")
+clos <- manning_closure(case, log = TRUE)
+lpfun_A0 <- function(lpfun, logqn, sigma) {
+  out <- function(A0) {
+    lpfun(A0 = A0, 
+        logqn = logqn,
+        sigma = sigma)
+  }
+}
+
+lpfun_logA0 <- function(lpfun, logqn, sigma) {
+  out <- function(logA0) {
+    lpfun(A0 = exp(logA0), 
+        logqn = logqn,
+        sigma = sigma)
+  }
+}
+
+lp_A0 <- lpfun_A0(lp_mm, logqn = apply(log(case$Q), 2, median) + mean(clos),
+                  sigma = sd(clos))
+
+lp_logA0 <- lpfun_logA0(lpfun = lp_mm, 
+                        logqn = apply(log(case$Q), 2, median) + mean(clos),
+                        sigma = sd(clos))
+
+lp_A0(A0 = rep(4000, nrow(case$W)))
+lp_A0(A0 = realA0(case, zero = "minimum"))
+
+# # The following requires changing lpfun_mm output to be negative log likelihood
+# foo <- nlm(lp_A0, p = rep(1, nrow(case$W)))
+# foo
+# 
+# plot(foo$estimate, realA0(case, zero = "minimum")); abline(0, 1)
+```
+
+Now a metropolis sampler. 
+
+```{r}
+niter <- 1000
+
+inits <- rep(10, nrow(case$W))
+
+state <- inits
+statemat <- matrix(rep(state, niter), nrow = niter, byrow = TRUE)
+for (i in 1:niter) {
+  prop <- rnorm(length(state), state, 0.2 / sqrt(i))
+  rat <- lp_logA0(prop) - lp_logA0(state)
+  
+  accept <- log(runif(1)) < rat
+  cat(ifelse(accept, "|", "."))
+  
+  if (accept) {
+    state <- prop
+  }
+  statemat[i, ] <- state
+}
+
+
+```
+
+```{r}
+plot(statemat[, 1])
+plot(exp(statemat[-1:-600, 1]))
+boxplot(exp(statemat[-1:-600, ])); points(realA0(case, zero = "minimum"), col = "red")
+```
+
+This is a good result. And a good place to stop for today. Next step: code a conditional A0 sampler to use within gibbs. Also a custom lpdf to use in stan. 
+
+Because I can't help myself, let's see the relative behavior of the stan NUTS sampler. Again, I'll condition A0 on the "true" parameters.
+
+```{stan output.var = "A0cond_stan"}
+data {
+  int ns;
+  int nt;
+  
+  vector[nt] x[ns];
+  vector[nt] dA[ns];
+  vector[nt] qn;
+  real sigma;
+}
+
+transformed data {
+  vector[nt] rhs[ns];
+  
+  for (i in 1:ns) {
+    rhs[i] = 3. / 5. * (qn - x[i]);
+  }
+  
+}
+
+parameters {
+  vector<lower = 0>[ns] A0;
+}
+
+model {
+  for (i in 1:ns) {
+    A0[i] + dA[i] ~ lognormal(rhs[i], sigma);
+  }
+}
+
+```
+
+```{r}
+data <- list(
+  ns = nrow(case$W),
+  nt = ncol(case$W),
+  x = 1 / 2 * log(case$S) - 2 / 3 * log(case$W),
+  dA = rezero_dA(case$dA, "minimum"),
+  qn = apply(log(case$Q), 2, median) + mean(clos),
+  sigma = sd(clos)
+)
+library(rstan)
+stansamps <- sampling(A0cond_stan, data = data, iter = 1000, chains = 1)
+
+stan_trace(stansamps, inc_warmup = FALSE)
+stan_trace(stansamps, inc_warmup = TRUE)
+summary(stansamps)$summary
+```
+
+Awesome. 

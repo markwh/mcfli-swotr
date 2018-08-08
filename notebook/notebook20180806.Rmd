@@ -291,39 +291,38 @@ $$
 \sigma^2_s \sim IG(\alpha, \beta)
 $$
 
-If this were SWOT data, we could define $x_{st} = W^{-3/5}
+If this were SWOT data, we could define $x_{st} = W^{-2/5}S^{3/10}
 
 ```{stan output.var = "testcase4"}
 data {
   int ns;
   int nt;
-  //vector[nx] x[2];
   vector[nt] dA[ns];
-  vector[ns] muhat;
-  //real sigsq;
+  vector<lower=0>[nt] x[ns];
+  real muhat;
   real musd;
   real alpha;
   real beta;
 }
 
 parameters {
-  vector[ns] mu;
+  real mu;
   vector<lower=0>[ns] A0;
-  vector<lower=0.01>[ns] prec;
+  real<lower=0.01> prec;
 }
 
 transformed parameters {
   //vector[nx] A[2]; 
-  vector<lower=0>[ns] sigma;
+  real<lower=0> sigma;
   
-  sigma = sqrt(1 ./ prec);
+  sigma = sqrt(1 / prec);
 }
 
 model {
   // x ~ normal(mu, sigma);
   
   for (i in 1:ns) {
-    A0[i] + dA[i] ~ lognormal(mu[i], sigma[i]);
+    (A0[i] + dA[i]) .* x[i] ~ lognormal(mu, sigma);
   }
   
   mu ~ normal(muhat, musd);
@@ -331,3 +330,141 @@ model {
 }
 ```
 
+Now the tricky part: simulate the appropriate data. 
+
+```{r}
+# invgam_mom(mean = mean(rnorm(1000, 0.1, 0.2)^2), 
+#            sd = sd(rnorm(1000, 0.05, 0.2)^2))
+# hist(1 / sqrt(rgamma(10000, shape = 2.81, rate = 0.095)))
+
+ns <- 4
+nt <- 600
+musd <- 0.5
+muhat <- rnorm(1, 3, 1)
+mu <- rnorm(1, muhat, musd)
+alpha <- 2.81
+beta <- 0.095
+prec <- rgamma(1, shape = alpha, rate = beta)
+sigma <- 1 / sqrt(prec)
+
+mu_A <- rnorm(ns, 4.5, 1)
+sigma_A <- abs(rnorm(ns, 0.5, 0.2))
+A <- map2(mu_A, sigma_A, ~rlnorm(nt, .x, .y)) %>% 
+  setNames(1:ns) %>% 
+  as.data.frame() %>% 
+  t()
+
+lhs <- matrix(rlnorm(ns * nt, mu, sigma), nrow = ns, ncol = nt)
+x <- lhs / A
+
+testdata <- within(list(
+  ns = ns, 
+  nt = nt,
+  A = A,
+  x = x,
+  muhat = muhat,
+  musd = musd,
+  alpha = alpha,
+  beta = beta
+  ), {
+    A0 = apply(A, 1, min)
+    dA = A - 
+      matrix(rep(A0, nt), nrow = ns, byrow = FALSE)
+  })
+post_stan <- sampling(testcase4, data = testdata, cores = 3, chains = 3,
+                      control = list(adapt_delta = 0.99))
+```
+
+
+```{r}
+pairs(post_stan, pars = "A0")
+stan_trace(post_stan, inc_warmup = TRUE, pars = "lp__")
+testdata$A0
+stan_trace(post_stan, inc_warmup = TRUE, pars = "A0")
+stan_trace(post_stan, inc_warmup = TRUE, pars = "prec")
+
+stan_trace(post_stan, inc_warmup = FALSE, pars = "sigma")
+sigma
+
+stan_trace(post_stan, inc_warmup = FALSE, pars = "prec")
+prec
+
+stan_trace(post_stan, inc_warmup = FALSE, pars = "mu")
+mu
+
+
+stan_hist(post_stan)
+summary(post_stan)$summary
+```
+
+Interesting. Mu and A0 are biased low; sigma is biased a little high (meaning prec is biased low). Anyway, it's a consistent result (based on a single dataset). Can I replicate using gibbs?
+
+```{r}
+
+
+# Modified function from lib/gibbs.R
+
+sample_A0 <- function(inputs, state) {
+  
+  # qnmat <- swot_vec2mat(state$qn, inputs$ws)
+  logxvec <- as.vector(inputs$logx)
+  
+  minmat <- log(inputs$dA)
+  minvec <- as.vector(minmat)
+  
+  avec <- truncnorm::rtruncnorm(inputs$ns * inputs$nt, 
+                                  a = minvec, b = Inf,
+                                  mean = state$mu - logxvec, 
+                                  sd = state$sigma)
+  amat <- matrix(avec, nrow = inputs$ns)
+  A0_med <- exp(amat) - inputs$dA_med
+  
+  out <- apply(A0_med + inputs$dA_med - inputs$dA, 1, geomMean)
+  
+  out
+}
+
+testdata$logx <- log(testdata$x)
+testdata$dA_med <- rezero_dA(testdata$dA, zero = "median")
+
+# Initialize chain
+niter <- 3000
+precchain <- sigmachain <- muchain <- numeric(niter)
+A0chain <- matrix(0, nrow = niter, ncol = ns)
+inits <- list(
+  mu = 0, 
+  prec = 0.01,
+  A0 = rep(0.1, ns))
+inits$logA <- log(testdata$dA + swot_vec2mat(inits$A0, testdata$dA))
+inits$sigma <- 1 / sqrt(inits$prec)
+
+state <- inits
+for (i in 1:niter) {
+  cat(".")
+  if (i %% 50 == 0) 
+    cat(i, "\n")
+  likmu <- mean(testdata$logx + state$logA)
+  state$mu <- sample_normal(priormu = testdata$muhat, priorsigsq = (testdata$musd)^2, 
+                            likmu = likmu, liksigsq = 1 / state$prec, 
+                            likn = testdata$ns * testdata$nt)
+  muchain[i] <- state$mu
+  state$prec <- rgamma(1, shape = postalpha(prialpha = testdata$alpha, 
+                                            n = testdata$ns * testdata$nt),
+                       rate = postbeta(pribeta = testdata$beta, 
+                                       y = as.vector(testdata$logx + state$logA), 
+                                       mu = state$mu))
+  state$sigma <- 1 / sqrt(state$prec)
+  precchain[i] <- state$prec
+  sigmachain[i] <- state$sigma
+  
+  state$A0 <- sample_A0(inputs = testdata, state = state)
+  A0chain[i, ] <- state$A0
+  state$logA <- log(swot_vec2mat(state$A0, testdata$dA) + testdata$dA)
+}
+
+plot(muchain)
+plot(sigmachain)
+plot(A0chain[, 1])
+```
+ 
+It appears the gibbs sampling of A0 does not work. Need recourse to a metropolis-in-gibbs. 
