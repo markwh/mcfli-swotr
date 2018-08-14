@@ -1,0 +1,123 @@
+---
+title: "notebook20180813"
+author: "Mark Hagemann"
+date: "August 13, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I'm implementing the metropolis-within-gibbs as an appendage of my mcman gibbs sampler. In order to do this I need to track some extra things in my `state` object. Specifically,
+
+- step size (sd for rnorm)
+- iteration (in order to let the step size decay to some optimal value)
+
+The purpose of these is to allow the Metropolis portion of the sampler to achieve some optimality, hueristically defined as having an acceptance rate of between 0.25 and 0.5 (iirc). In order to do this probabilistically, I'll implement the following:
+
+- compute metropolis ratio as usual
+- if ACCEPT:
+    - step size is locally too small; increase with probability $1 - p$; do not chainge with probability $p$
+- if REJECT:
+    - step size is locally too large; decrease with probability $p$; do not change with probability $1-p$.
+    
+    
+Test of the idea. Consider sampling from a normal distribution with standard deviation $s$. Use Metropolis to sample from this distribution and achieve a final acceptance ration of $p$. 
+
+```{r}
+# True distribution from which to sample
+mu <- runif(1, 0, 100)
+sig <- runif(1, 0, 10)
+dens <- function(x) dnorm(x, mu, sig, log = TRUE)
+
+# incrementing function for optimization
+incfun <- function(iter, start = 1) exp(5 / sqrt(iter - (start - 1)))
+p <- 0.95
+
+# initialize chain
+inits <- list(x = 0, s = 1)
+niter <- 10000
+xchain <- schain <- numeric(niter)
+
+# acceptance ratio function
+arat <- function(x) {
+  lx <- length(x)
+  rej <- x[1:(lx - 1)] == x[2:lx]
+  out <- sum(!rej) / (lx - 1)
+  out
+}
+
+state <- inits
+optim <- FALSE # don't start to optimize until first acceptance
+for (i in 1:niter) {
+  if (i %% 1000 == 0) cat(i, "\n")
+  xi <- rnorm(1, state$x, state$s)
+  rat <- exp(dens(xi) - dens(state$x))
+  if (runif(1) < rat) { # accept
+    if (!optim) {
+      optim <- TRUE
+      start <- i
+    }
+    state$x <- xi
+    if (optim && runif(1) > p)
+      state$s <- state$s * incfun(i, start)
+  } else if (optim && runif(1) < p) { # reject, decrease s
+    state$s <- state$s / incfun(i, start)
+  }
+  
+  xchain[i] <- state$x
+  schain[i] <- state$s
+}
+
+aratvec <- map_dbl(1:(niter - 200), ~arat(xchain[.:(. + 200)])) 
+
+```
+
+This is really beautiful. Now put it to work. 
+
+As I was saying earlier, I need to track new things in the `state` object--namely step size and iteration. But I also need to be able to set these things as well as `A0` with a single call to `sample_A0`. So it could look something like:
+
+```{r}
+## old way was:
+# state$A0 <- sample_A0(inputs, state)
+
+# New way:
+A0samp <- sample_A0(inputs, state)
+state$A0 <- A0samp$A0
+state$stepsize <- A0samp$stepsize
+state$iter <- i
+
+# Also need a function that decays to 1. 
+decfun <- function(x) {
+  exp(5 * inits$logA0_sd / sqrt(x))
+}
+```
+
+
+```{r}
+sample_logA0 <- function(inputs, state) {
+  logA0 <- state$logA0
+  prop <- rnorm(inputs$nx, state$logA0, state$stepsize)
+  ratnum <- ll_mm(exp(prop), logqn = state$qn, sigma = 1 / sqrt(state$prec)) +
+    sum(dnorm(prop, inputs$logA0_hat, inputs$logA0_sd, log = TRUE))
+  ratdenom <- ll_mm(state$A0, logqn = state$qn, sigma = 1 / sqrt(state$prec)) +
+    sum(dnorm(log(state$A0), inputs$logA0_hat, inputs$logA0_sd, log = TRUE))
+  rat <- ratnum - ratdenom
+  
+  accept <- log(runif(1)) < rat
+  
+  if (accept) {
+    # cat("|")
+    logA0 <- prop
+    if (runif(1) > inputs$optar)
+      state$stepsize <- state$stepsize * decfun(i)
+  } else if (runif(1) < inputs$optar) {
+    state$stepsize <- state$stepsize / decfun(i)
+    # cat(".")
+  }
+  
+  out <- list(A0 <- )
+}
+```
+

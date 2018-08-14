@@ -11,12 +11,13 @@ knitr::opts_chunk$set(echo = TRUE)
 
 Mass conservation can be imposed in a couple of different ways. The easy way assumes the river is at quasi-steady state, in which case $\frac{\partial Q}{\partial x} = 0$ is a good approximation. The hard way is harder, but more correct. $\frac{\partial Q}{\partial x} = \frac{\partial A}{\partial t}$. If steady-state is a bad assumption, can we approximate the flow difference in space using the area difference in time? In this endeavor we are limited by the coarse spatial resolution of SWOT observations, meaning that any estimate of $\frac{\partial A}{\partial t}$ via $\frac{\Delta A}{\Delta t}$ is a crude approximation. How crude?
 
-In this document I will be investigating the validitiy of the approximation $\frac{\Delta Q}{\Delta x} = \frac{\Delta A}{\Delta t}$ using Pepsi 1 and lisflood datasets. The former have daily time resolution--much higher than SWOT will actually achieve--as well as perfect simulated geometry and flow at high spatial resolution cross sections. This, and the aggregated reaches, will allow exploration of the equality in question for a number of spatial and temporal resolutions. 
+In this document I will be investigating the validitiy of the approximation $\frac{\Delta Q}{\Delta x} = \frac{\Delta A}{\Delta t}$ using Pepsi 1 and lisflood datasets. The former have daily time resolution--much higher than SWOT will actually achieve for most of the globe--as well as perfect simulated geometry and flow at high spatial resolution cross sections. This, and the aggregated reaches, will allow exploration of the equality in question for a number of spatial and temporal resolutions. 
 
 ## First, lisflood. 
 
 ```{r}
-profs <- lis_profiles("../lisflood/toy_1/results_simple_v2/") %>% 
+list.files("../../lisflood/toy_1/results_simple/")
+profs <- lis_profiles("../../lisflood/toy_1/results_simple/") %>% 
   filter(time > 23,  # Omit spin-up
          ChanX < 30001) %>% 
   transmute(Q = Flow, H = WaterElev, D = WaterDepth, W = Width,

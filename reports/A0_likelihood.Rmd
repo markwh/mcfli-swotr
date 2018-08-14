@@ -67,9 +67,6 @@ lpfun_mm <- function(swotlist, zero = "same") {
   out
 }
 
-case <- reachdata$Ganges
-lp_mm <- lpfun_mm(swotlist = case, zero = "minimum")
-clos <- manning_closure(case, log = TRUE)
 lpfun_A0 <- function(lpfun, logqn, sigma) {
   out <- function(A0) {
     lpfun(A0 = A0, 
@@ -85,6 +82,12 @@ lpfun_logA0 <- function(lpfun, logqn, sigma) {
         sigma = sigma)
   }
 }
+
+
+case <- reachdata$Ganges
+lp_mm <- lpfun_mm(swotlist = case, zero = "minimum")
+clos <- manning_closure(case, log = TRUE)
+
 
 lp_A0 <- lpfun_A0(lp_mm, logqn = apply(log(case$Q), 2, median) + mean(clos),
                   sigma = sd(clos))
