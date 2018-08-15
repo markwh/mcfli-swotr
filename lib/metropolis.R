@@ -44,7 +44,7 @@ llfun_logA0 <- function(llfun, logqn, sigma) {
 
 
 # Sample ------------------------------------------------------------------
-ll_mm <- llfun_mm(reachdata$Ganges)
+# ll_mm <- llfun_mm(reachdata$Ganges)
 
 sample_logA0 <- function(inputs, state) {
   prop <- rnorm(inputs$nx, state$logA0, state$stepsize)
