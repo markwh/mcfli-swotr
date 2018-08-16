@@ -1,0 +1,14 @@
+---
+title: "notebook20180816"
+author: "Mark Hagemann"
+date: "August 16, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Yesterday I merged bamr's stanfiles into a single master file. Today I need to test how these perform compared to devel, master branch vesrsions of bamr. I'm going to try doing this on the cloud, with different gce instances for each of the different versions. Steps along the way:
+
+- Get gcloud on desktop. 
