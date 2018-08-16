@@ -32,12 +32,12 @@ sig <- runif(1, 0, 10)
 dens <- function(x) dnorm(x, mu, sig, log = TRUE)
 
 # incrementing function for optimization
-incfun <- function(iter, start = 1) exp(5 / sqrt(iter - (start - 1)))
-p <- 0.95
+incfun <- function(iter, start = 1) exp(1 / sqrt(iter - (start - 1)))
+p <- 0.4
 
 # initialize chain
 inits <- list(x = 0, s = 1)
-niter <- 10000
+niter <- 100000
 xchain <- schain <- numeric(niter)
 
 # acceptance ratio function
@@ -70,8 +70,12 @@ for (i in 1:niter) {
   schain[i] <- state$s
 }
 
-aratvec <- map_dbl(1:(niter - 200), ~arat(xchain[.:(. + 200)])) 
+aratvec <- map_dbl(1:(niter - 1000), ~arat(xchain[.:(. + 1000)])) 
 
+plot(aratvec)
+plot(xchain)
+plot(xchain[99000:100000])
+plot(schain, log = "x")
 ```
 
 This is really beautiful. Now put it to work. 
@@ -85,7 +89,7 @@ As I was saying earlier, I need to track new things in the `state` object--namel
 # New way:
 A0samp <- sample_A0(inputs, state)
 state$A0 <- A0samp$A0
-state$stepsize <- A0samp$stepsize
+state$stepsize_logA0 <- A0samp$stepsize
 state$iter <- i
 
 # Also need a function that decays to 1. 
@@ -96,9 +100,13 @@ decfun <- function(x) {
 
 
 ```{r}
-sample_logA0 <- function(inputs, state) {
-  logA0 <- state$logA0
-  prop <- rnorm(inputs$nx, state$logA0, state$stepsize)
+sample_A0 <- function(inputs, state) {
+  logA0 <- log(state$A0)
+  stepsize <- state$stepsize_logA0
+  bds <- inputs$lowerbound_logA0
+  prop <- truncnorm::rtruncnorm(inputs$nx, a = bds, b = Inf, 
+                                mean = logA0, sd = state$stepsize)
+  
   ratnum <- ll_mm(exp(prop), logqn = state$qn, sigma = 1 / sqrt(state$prec)) +
     sum(dnorm(prop, inputs$logA0_hat, inputs$logA0_sd, log = TRUE))
   ratdenom <- ll_mm(state$A0, logqn = state$qn, sigma = 1 / sqrt(state$prec)) +
@@ -111,13 +119,13 @@ sample_logA0 <- function(inputs, state) {
     # cat("|")
     logA0 <- prop
     if (runif(1) > inputs$optar)
-      state$stepsize <- state$stepsize * decfun(i)
+      stepsize <- stepsize * decfun(i)
   } else if (runif(1) < inputs$optar) {
-    state$stepsize <- state$stepsize / decfun(i)
+    stepsize <- stepsize / decfun(i)
     # cat(".")
   }
   
-  out <- list(A0 <- )
+  out <- list(A0 = exp(logA0), stepsize = stepsize)
 }
 ```
 

@@ -1,6 +1,14 @@
 # Gibbs sampler functions for McMan
 
-gibbs_inputs <- function(swotlist, Qhat = NULL) {
+#' Gibbs sampler inputs
+#' 
+#' @param swotlist a list of DAWG matrices
+#' @param Qhat prior mean estimate of mean discharge. If \code{null}, 
+#'  will attempt to get from \code{attr(swotlist, "QWBM")}
+#' @param optar Optimum acceptance rate for metropolis portion of sampler.
+#' @importFrom swotr swot_bamdata rezero_dA findif_x
+#' @export
+gibbs_inputs <- function(swotlist, Qhat = NULL, optar = 0.4) {
   # Specify known quantities
   bdat <- swot_bamdata(swotlist, Qhat = Qhat)
 
@@ -14,8 +22,11 @@ gibbs_inputs <- function(swotlist, Qhat = NULL) {
   A0_min <- -apply(bi$dAobs, 1, min)
   dx <- findif_x(swotlist$x)[, 1:bi$nt]
   deltax <- (swotlist$x - mean(swotlist$x))[, 1:bi$nt]
+  llfun <- llfun_mm(swotlist = swotlist, zero = "median") # log likelihood function for Met.
   
-  out <- c(bi, list(ws = ws, A0_min = A0_min, dx = dx, deltax = deltax))
+  out <- c(bi, list(ws = ws, A0_min = A0_min, dx = dx, deltax = deltax, 
+                    optar = optar, 
+                    llfun = llfun))
   out
 }
 
@@ -33,7 +44,8 @@ gibbs_init_high <- function(inputs) {
     dgdx = rep(0, inputs$nt),
     sigsq_dgdx = 1 / max(inputs$dx),
     nubar = rep(0, inputs$nx),
-    sigsq_nubar = 1e5
+    sigsq_nubar = 1e5,
+    stepsize_logA0 = 25
   )
   out$logA <- log(swot_A(out$A0, inputs$dAobs))
   out$gamma <- inputs$dx * swot_vec2mat(out$dgdx, inputs$dx)
@@ -53,7 +65,8 @@ gibbs_init_low <- function(inputs) {
     dgdx = rep(0, inputs$nt),
     sigsq_dgdx = 1e-5 / max(inputs$dx),
     nubar = rep(0, inputs$nx),
-    sigsq_nubar = 1e-5
+    sigsq_nubar = 1e-5,
+    stepsize_logA0 = 0.1
   )
   out$logA <- log(swot_A(out$A0, inputs$dAobs))
   out$gamma <- inputs$dx * swot_vec2mat(out$dgdx, inputs$dx)
@@ -77,7 +90,8 @@ gibbs_init_rand <- function(inputs, sd = 2) {
     dgdx = rnorm(inputs$nt, 0, 0.1 * sd / max(inputs$dx)),
     sigsq_dgdx = abs(rnorm(1, 0, 0.1 * sd)),
     nubar = rnorm(inputs$nx, 0, 0.1 * sd),
-    sigsq_nubar = abs(rnorm(1, 0, 0.1 * sd))
+    sigsq_nubar = abs(rnorm(1, 0, 0.1 * sd)),
+    stepsize_logA0 = 10^runif(1, -1, 1.3)
   )
   out$logA <- log(swot_A(out$A0, inputs$dAobs))
   out$gamma <- inputs$dx * swot_vec2mat(out$dgdx, inputs$dx)
@@ -372,7 +386,7 @@ gibbs_sample_chain <- function(inputs, inits, iter, thin = 1,
   # Sampling
   printint <- printint * thin
   for (i in 1:(iter * thin)) {
-
+    state$iter <- i
     draw <- (i %% thin == 0)
     if (verbose && (i %% printint == 0)) {
       # browser()
@@ -382,7 +396,14 @@ gibbs_sample_chain <- function(inputs, inits, iter, thin = 1,
     state$qbar <- sample_qbar(inputs, state)
     state$qn <- sample_qn(inputs, state)
     state$n <- sample_n(inputs, state)
-    state$A0 <- sample_A0(inputs, state)
+    # state$A0 <- sample_A0(inputs, state)
+    
+    # Metropolis portion
+    A0samp <- met_sample_A0(inputs, state)
+    state$A0 <- A0samp$A0
+    state$stepsize_logA0 <- A0samp$stepsize
+    # end Metropolis portion.
+    
     state$logA <- log(swot_A(A0vec = state$A0, dAmat = inputs$dAobs))
     state$sigsq_epsilon <- sample_sigsq_epsilon(inputs, state)
     state$sigsq_q <- sample_sigsq_q(inputs, state)
@@ -433,6 +454,7 @@ gibbs_sample_chain <- function(inputs, inits, iter, thin = 1,
         sampparams <- c(sampparams, "nubar", "sigsq_nubar")
       }
       # Calculate log posterior
+      # browser()
       totlp <- sum(map_dbl(state[sampparams], ~attr(., "llik")))
       lpchain[ci] <- totlp
     }
