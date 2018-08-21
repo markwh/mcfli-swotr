@@ -1,0 +1,26 @@
+---
+title: "notebook20180816"
+author: "Mark Hagemann"
+date: "August 16, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Yesterday I merged bamr's stanfiles into a single master file. Today I need to test how these perform compared to devel, master branch vesrsions of bamr. I'm going to try doing this on the cloud, with different gce instances for each of the different versions. Steps along the way:
+
+- Get gcloud on desktop. DONE
+- Make and host a custom dockerfile for bamr.
+    - Based on [this one](https://hub.docker.com/r/jonzelner/rstan/~/dockerfile/), probably
+    - Additionally install these R packages
+        - devtools
+        - swotr
+- Test custom dockerfile locally
+- Host reachdata on cloud (box, probably)
+- Create 6 (?) cloud instances based on dockerfile
+    - use cheap version that is prone to crashing
+- Open these in browser tabs
+- Pick 2 (?) cases to test. 
+- Set a random seed on all 

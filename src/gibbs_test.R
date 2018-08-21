@@ -5,6 +5,12 @@ testcase <- within(reachdata$Seine, {x = x / 10000})
 inputs <- testcase %>% gibbs_inputs()
 # gibbs_inputs(Qhat = 120)
 
+testinits <- gibbs_init_rand(inputs = inputs)
+testchain <- gibbs_sample_chain(inputs = inputs, inits = testinits, gamma = FALSE, nu = FALSE, 
+                                iter = 2000, thin = 50)
+cache("testchain")
+stan_trace(gibbs_stanfit(list(testchain)), pars = "A0", inc_warmup = TRUE)
+  stan_trace(gibbs_stanfit(list(testchain)), pars = "lp__", inc_warmup = TRUE)
 
 samps1 <- gibbs_sample(inputs = inputs, chains = 3, iter = 3000,
                        thin = 1, serial = FALSE)

@@ -37,7 +37,7 @@ $$
 
 ## Sampling from the conditional posterior
 
-Because of the funny sum-in-log term, this is difficult if not impossible to sample from directly. Instead we must resort to Metropolis-Hastings. The question is what proposal distribution to use. I propose (hah) the distribution given by the following likelihood $\ell'()$
+Because of the funny sum-in-log term, this is difficult if not impossible to sample from directly. Instead we must resort to Metropolis sampling. The question is what proposal distribution to use. I propose (hah) the distribution given by the following likelihood $\ell'()$
 
 $$
 A_{0,s}^{(i)} \sim \log N(\frac{5}{3} x_{st} - \frac{5}{3} \log(q_tn), \sigma)
@@ -191,3 +191,5 @@ summary(stansamps)$summary
 ```
 
 Awesome. 
+
+

@@ -42,15 +42,29 @@ llfun_logA0 <- function(llfun, logqn, sigma) {
   }
 }
 
+#' Function that decays to 1 for optimizing step size
+#' 
+#' @param iter chain iteration number. Later iterations will yield values closer to 1.
+#' @param scale scale factor: larger values will yield early values farther from 1. 
+decfun <- function(iter, scale = 5) {
+  exp(scale / sqrt(iter))
+}
+
 
 # Sample ------------------------------------------------------------------
 # ll_mm <- llfun_mm(reachdata$Ganges)
 
-sample_logA0 <- function(inputs, state) {
-  prop <- rnorm(inputs$nx, state$logA0, state$stepsize)
-  ratnum <- ll_mm(exp(prop), logqn = state$qn, sigma = 1 / sqrt(state$prec)) +
+met_sample_A0 <- function(inputs, state) {
+  logA0 <- log(state$A0)
+  stepsize <- state$stepsize_logA0
+  llfun <- inputs$llfun
+  bds <- log(inputs$A0_min)
+  prop <- truncnorm::rtruncnorm(inputs$nx, a = bds, b = Inf, 
+                                mean = logA0, sd = state$stepsize)
+  
+  ratnum <- llfun(exp(prop), logqn = state$qn, sigma = sqrt(state$sigsq_epsilon)) +
     sum(dnorm(prop, inputs$logA0_hat, inputs$logA0_sd, log = TRUE))
-  ratdenom <- ll_mm(state$A0, logqn = state$qn, sigma = 1 / sqrt(state$prec)) +
+  ratdenom <- llfun(state$A0, logqn = state$qn, sigma = sqrt(state$sigsq_epsilon)) +
     sum(dnorm(log(state$A0), inputs$logA0_hat, inputs$logA0_sd, log = TRUE))
   rat <- ratnum - ratdenom
   
@@ -58,11 +72,17 @@ sample_logA0 <- function(inputs, state) {
   
   if (accept) {
     # cat("|")
-    state <- prop
-  } else {
+    logA0 <- prop
+    if (runif(1) > inputs$optar)
+      stepsize <- stepsize * decfun(i, scale = 5)
+  } else if (runif(1) < inputs$optar) {
+    stepsize <- stepsize / decfun(i, scale = 5)
     # cat(".")
   }
   
+  out <- list(A0 = exp(logA0), stepsize = stepsize, accept = accept)
+  attr(out$A0, "llik") <- ifelse(accept, ratnum, ratdenom)
+  out
 }
 
 
