@@ -1,6 +1,0 @@
-# rprofile
-# To prepare the r session for bam runs
-# This will be automatically sourced on R startup.
-
-library(devtools)
-devtools::install_github("markwh/swotdata")
