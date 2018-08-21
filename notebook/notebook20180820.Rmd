@@ -1,0 +1,53 @@
+---
+title: "notebook20180820"
+author: "Mark Hagemann"
+date: "August 20, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I've got several irons in the fire. Work on getting this number down. 
+
+1. compare performance across different bamr branches
+    - master
+    - devel (different priors, median A0)
+    - consolidate
+2. Implement missing-data capacity in bamr
+3. Run Mississippi data
+    - requires missing-data capacity
+4. Finish gibbs, compare to stan results
+    - Respond to Hossein
+5. Check on Joe's manuscript
+    - Did he update the folder?
+6. Read, comment on Steve's manuscript
+7. Docker file, cloud instances for bamr branches in 1. 
+    - Make my own dockerfile with versions hosted on dockerhub.
+    - Which dockerfile did I decide worked best?
+        - jrnold/rstan appears to work fine. 
+        - May want to pare this down for my purposes. 
+    
+
+## Update
+
+As of midday (12:40) I've done the following:
+
+- get gcloud working on windows pc
+    - installed both python 2.7 and 3.7--set environment variable to distinguish
+- use ssh-admin and ssh-add to get ssh working with gce instances on windows pc
+- clone (via snapshot) rocker1 instance to new rocker2 instance 
+    - purge existing containers and images on cloned instance via `docker system prune -a`. Found [here](https://www.digitalocean.com/community/tutorials/how-to-remove-docker-images-containers-and-volumes)
+    - Run jrnold/rstan on rocker2. 
+- Install bamr from command line. Installation works! (consolidate branch)
+- Verified `ssh -NL 8787:localhost:8787 [ip]` works on both laptop and desktop
+
+For the afternoon:
+
+- Read GoogleComputeEngineR docs
+- Outline a `future`-based workflow for testing bamr branches
+- Learn more about docker
+    - volumes
+- Create dockerhub/github repo for bamr cloud-ready containers
+    
