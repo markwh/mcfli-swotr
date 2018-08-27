@@ -1,0 +1,73 @@
+---
+title: "notebook20180823"
+author: "Mark Hagemann"
+date: "August 23, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I've made a lot of progress the last few days in getting docker images up, running, and pushed to dockerhub for the different branches of bamr. This will allow me to quickly verify results across branches without the bottleneck of my personal computer. In today's notebook I'll be documenting the workflow for using these in R. 
+
+I still need to figure out how to run R in a remote vm from within R on local machine. Some options are:
+
+- manually spin up images, get ip addresses, use these diretly in `future` call.
+- Spin up using **googleComputeEngineR** and use similar to documented [here](https://cloudyr.github.io/googleComputeEngineR/articles/massive-parallel.html)
+
+I currently have preference for the first, since I'm not terribly impressed with gceR syntax or documentation. However, this will require first:
+
+- spinning up (or starting) a gce instance
+- `docker run`ning on the instance with specified image
+- exposing a port for ssh to use. 
+
+Give this a shot. 
+
+
+
+```{r}
+library(future)
+plan(remote(workers = "35.199.36.209"))
+```
+
+```{r}
+library(googleComputeEngineR)
+```
+
+Inspect defaults. 
+
+```{r}
+projinfo <- gce_get_project()
+projinfo$commonInstanceMetadata$items
+```
+
+See if I can reference a running instance
+
+```{r}
+rocker2 <- gce_get_instance("rocker2", zone = "us-east4-b")
+is.gce_instance(rocker2)
+gce_list_instances(zone = "us-east4-b")
+
+rocker2 <- gce_vm(name = "rocker2", zone = "us-east4-b")
+```
+
+OK, I had to do a patch and pull request, but this works now. 
+
+Now following instructions [here](https://cloudyr.github.io/googleComputeEngineR/articles/docker-ssh-futures.html#docker-commands)
+
+Ugh, and I had to fix my HOME environment variable.
+
+```{r}
+gce_ssh_setup(rocker2)
+foo <- gce_check_ssh(rocker2)
+
+docker_cmd(rocker2, "instances", zone = "us-east4-b", capture_text = TRUE)
+docker_cmd(rocker2, "ps", "-a", zone = "us-east4-b", capture_text = TRUE)
+docker_inspect(rocker2, zone = "us-east4-b")
+```
+
+
+
+
+
