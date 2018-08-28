@@ -1,0 +1,86 @@
+---
+title: "notebook20180828"
+author: "Mark Hagemann"
+date: "August 28, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I finally have a workable gce + docker workflow for comparing results of different bamr branches. Now it's time to do those comparisons so I can push forward on improving bamr. Start by making a utility function for cluster planning.
+
+```{r}
+# Based on work in notebook20180823 and online tutorial linked therein.
+
+library(future)
+docker_clustfun <- function(ext_ip, docker_image, user = "markh", 
+                            keyfile = "~/.ssh/google_compute_engine", ...) {
+  cl <- makeClusterPSOCK(
+  ext_ip,
+
+  # User name; DigitalOcean droplets use root by default
+  user = user,
+
+  # Use private SSH key registered with DigitalOcean
+  rshopts = c(
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "IdentitiesOnly=yes",
+    "-i", keyfile
+  ),
+
+  # Command to run on each remote machine
+  # The script loads the tidyverse Docker image
+  # --net=host allows it to communicate back to this computer
+  rscript = c("sudo", "docker", "run", "--net=host", 
+              docker_image, "Rscript"),
+
+  # These are additional commands that are run on the remote machine. 
+  # At minimum, the remote machine needs the future library to work—installing furrr also installs future.
+  rscript_args = c(
+    # Create directory for package installation
+    "-e", shQuote("local({p <- Sys.getenv('R_LIBS_USER'); dir.create(p, recursive = TRUE, showWarnings = FALSE); .libPaths(p)})"),
+    # Install furrr and future
+    "-e", shQuote("if (!requireNamespace('furrr', quietly = TRUE)) install.packages('furrr')")
+  ),
+
+  # Actually run this stuff. Set to TRUE if you don't want it to run remotely.
+  dryrun = FALSE,
+  ...
+)
+}
+
+```
+
+Recall: I need to make a snapshot. Alternatively I can just clone the instances from the console. I think I'll do that. 
+
+The workflow will then be:
+
+```{r}
+testcases <- reachdata[c("Cumberland", "Ganges", "SacramentoUpstream")]
+
+toeval1 <- expression({
+  test_bd <- purrr::map(testcases, ~swot_bamdata)
+  test_be <- purrr::map(test_bd, ~bamr::bam_estimate(., variant = "manning", 
+                                                     reparam = TRUE, meas_error = TRUE))
+})
+
+toeval2 <- expression({
+  test_bd <- purrr::map(testcases, ~swot_bamdata)
+  test_be <- purrr::map(test_be, ~bamr::bam_estimate(., variant = "manning", 
+                                                     reparam = TRUE, meas_error = FALSE))
+})
+
+# Start the vm's (do this externally on command line)
+
+clust1 <- docker_clustfun(ext_ip = "35.194.83.35", user = "markh",
+                          docker_image = "markwh/bam-docker:master", 
+                          # makeNode = myMakenode,
+                          keyfile = "C:/Users/markh/.ssh/google_compute_engine", verbose = TRUE)
+clust2 <- docker_clustfun(ext_ip = gce_get_external_ip("rocker3", zone = "us-east4-b"),
+                          docker_image = "markwh/bam-docker:devel")
+clust3 <- docker_clustfun(ext_ip = gce_get_external_ip("rocker4", zone = "us-east4-b"), 
+                          docker_image = "markwh/bam-docker:consolidate")
+```
+
