@@ -61,13 +61,99 @@ Ugh, and I had to fix my HOME environment variable.
 ```{r}
 gce_ssh_setup(rocker2)
 foo <- gce_check_ssh(rocker2)
+gce_ssh(rocker2, "echo foo")
 
+docker_cmd(rocker2, "")
 docker_cmd(rocker2, "instances", zone = "us-east4-b", capture_text = TRUE)
 docker_cmd(rocker2, "ps", "-a", zone = "us-east4-b", capture_text = TRUE)
 docker_inspect(rocker2, zone = "us-east4-b")
 ```
 
 
+Hmm. Trying some more R-via-docker from the above-linked tutorial.
+
+```{r}
+vm <- gce_vm(template = "markwh/bam-docker", name = "rocker3")
+vm <- gce_vm_container()
+vm <- gce_vm(template = "r-base", name = "rbase")
+vm <- gce_ssh_addkeys(username = "markh", instance = "rbase")
+```
 
 
+## Following a different tutorial
 
+The tutorial [here](https://www.andrewheiss.com/blog/2018/07/30/disposable-supercomputer-future/#full-example) seems to be a good one. Follow that. 
+
+The following is modified copy-paste from the above link.
+
+```{r}
+library(future)
+# Public IP for droplet(s); this can also be a vector of IP addresses
+ip <- "35.194.83.35"
+
+# Path to private SSH key that matches key uploaded to DigitalOcean
+ssh_private_key_file <- "~/.ssh/google_compute_engine"
+docker_image <- "markwh/bam-docker:consolidate"
+
+
+# Connect and create a cluster
+cl <- makeClusterPSOCK(
+  ip,
+
+  # User name; DigitalOcean droplets use root by default
+  user = "markwh",
+
+  # Use private SSH key registered with DigitalOcean
+  rshopts = c(
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "IdentitiesOnly=yes",
+    "-i", ssh_private_key_file
+  ),
+
+  # Command to run on each remote machine
+  # The script loads the tidyverse Docker image
+  # --net=host allows it to communicate back to this computer
+  rscript = c("sudo", "docker", "run", "--net=host", 
+              docker_image, "Rscript"),
+
+  # These are additional commands that are run on the remote machine. 
+  # At minimum, the remote machine needs the future library to work—installing furrr also installs future.
+  rscript_args = c(
+    # Create directory for package installation
+    "-e", shQuote("local({p <- Sys.getenv('R_LIBS_USER'); dir.create(p, recursive = TRUE, showWarnings = FALSE); .libPaths(p)})"),
+    # Install furrr and future
+    "-e", shQuote("if (!requireNamespace('furrr', quietly = TRUE)) install.packages('furrr')")
+  ),
+
+  # Actually run this stuff. Set to TRUE if you don't want it to run remotely.
+  dryrun = FALSE
+)
+```
+
+That may have finally done the trick!
+
+```{r}
+plan(cluster, workers = cl)
+
+n_cpus %<-% { parallel::detectCores()}
+n_cpus
+
+remotels %<-% {list.files()}
+remotels
+```
+
+Try a bam estimate!
+
+```{r}
+bd1 <- swot_bamdata(reachdata$Ganges)
+
+be_cons %<-% {bamr::bam_estimate(bd1, variant = "manning", meas_err = TRUE, reparam = TRUE)}
+
+bam_hydrograph(be_cons)
+```
+
+So nice when something works! Next steps:
+
+- create several vms, each with its own version of bamr
+- run a few cases
+- compare results (visually, probably). 
