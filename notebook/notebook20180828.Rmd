@@ -15,7 +15,7 @@ I finally have a workable gce + docker workflow for comparing results of differe
 # Based on work in notebook20180823 and online tutorial linked therein.
 
 library(future)
-docker_clustfun <- function(ext_ip, docker_image, user = "markh", 
+docker_clustfun <- function(ext_ip, docker_image, user = "markwh", 
                             keyfile = "~/.ssh/google_compute_engine", ...) {
   cl <- makeClusterPSOCK(
   ext_ip,
@@ -60,27 +60,185 @@ The workflow will then be:
 ```{r}
 testcases <- reachdata[c("Cumberland", "Ganges", "SacramentoUpstream")]
 
-toeval1 <- expression({
-  test_bd <- purrr::map(testcases, ~swot_bamdata)
-  test_be <- purrr::map(test_bd, ~bamr::bam_estimate(., variant = "manning", 
-                                                     reparam = TRUE, meas_error = TRUE))
-})
-
-toeval2 <- expression({
-  test_bd <- purrr::map(testcases, ~swot_bamdata)
-  test_be <- purrr::map(test_be, ~bamr::bam_estimate(., variant = "manning", 
-                                                     reparam = TRUE, meas_error = FALSE))
-})
-
 # Start the vm's (do this externally on command line)
 
-clust1 <- docker_clustfun(ext_ip = "35.194.83.35", user = "markh",
+clust1 <- docker_clustfun(ext_ip = gce_get_external_ip("rocker2", 
+                                                       zone = "us-east4-b"), 
+                          user = "markwh",
                           docker_image = "markwh/bam-docker:master", 
                           # makeNode = myMakenode,
-                          keyfile = "C:/Users/markh/.ssh/google_compute_engine", verbose = TRUE)
-clust2 <- docker_clustfun(ext_ip = gce_get_external_ip("rocker3", zone = "us-east4-b"),
+                          # keyfile = "C:/Users/markh/.ssh/google_compute_engine",
+                          verbose = TRUE)
+
+clust2 <- docker_clustfun(ext_ip = gce_get_external_ip("rocker3", 
+                                                       zone = "us-east4-b"),
                           docker_image = "markwh/bam-docker:devel")
-clust3 <- docker_clustfun(ext_ip = gce_get_external_ip("rocker4", zone = "us-east4-b"), 
+clust3 <- docker_clustfun(ext_ip = gce_get_external_ip("rocker4", 
+                                                       zone = "us-east4-b"),
                           docker_image = "markwh/bam-docker:consolidate")
 ```
 
+Now run!
+
+```{r}
+
+futureAssign("evals1_master", value = {
+      test_bd <- purrr::map(testcases, ~swot_bamdata(.))
+      test_be <- purrr::map(test_bd, 
+                            ~bamr::bam_estimate(., 
+                              variant = "manning", 
+                              reparam = TRUE, 
+                              meas_error = TRUE))}, 
+             evaluator = tweak(cluster, workers = clust1))
+futureAssign("evals1_devel", 
+   value = {
+      test_bd <- purrr::map(testcases, ~swot_bamdata(.))
+      test_be <- purrr::map(test_bd, 
+                            ~bamr::bam_estimate(., 
+                              variant = "manning", 
+                              reparam = TRUE, 
+                              meas_error = TRUE))},
+             evaluator = tweak(cluster, workers = clust2))
+futureAssign("evals1_consolidate",  
+    value = {
+      test_bd <- purrr::map(testcases, ~swot_bamdata(.))
+      test_be <- purrr::map(test_bd, 
+                            ~bamr::bam_estimate(., 
+                              variant = "manning", 
+                              reparam = TRUE, 
+                              meas_error = TRUE))},
+             evaluator = tweak(cluster, workers = clust3))
+
+
+```
+
+```{r}
+
+futureAssign("evals2_master", value = {
+      test_bd <- purrr::map(testcases, ~swot_bamdata(.))
+      test_bp <- purrr::map(test_bd, 
+                      ~bam_priors(., variant = "manning_amhg",
+                                  logA0_sd = 0.5, logn_sd = 1))
+      test_be <- purrr::map2(test_bd, test_bp,
+                            ~bamr::bam_estimate(.x, bampriors = .y,
+                              variant = "manning_amhg", 
+                              reparam = TRUE, 
+                              meas_error = TRUE))}, 
+             evaluator = tweak(cluster, workers = clust1))
+futureAssign("evals2_devel", 
+   value = {
+      test_bd <- purrr::map(testcases, ~swot_bamdata(.))
+      test_bp <- purrr::map(test_bd, 
+                            ~bam_priors(., variant = "manning_amhg",
+                                        logA0_sd = 0.5, logn_sd = 1))
+      test_be <- purrr::map2(test_bd, test_bp,
+                            ~bamr::bam_estimate(.x, bampriors = .y,
+                              variant = "manning_amhg", 
+                              reparam = TRUE, 
+                              meas_error = TRUE))},
+             evaluator = tweak(cluster, workers = clust2))
+futureAssign("evals2_consolidate",  
+   value = {
+      test_bd <- purrr::map(testcases, ~swot_bamdata(.))
+      test_bp <- purrr::map(test_bd, 
+                      ~bam_priors(., variant = "manning_amhg",
+                                  logA0_sd = 0.5, logn_sd = 1))
+      test_be <- purrr::map2(test_bd, test_bp,
+                            ~bamr::bam_estimate(.x, bampriors = .y, 
+                              variant = "manning_amhg", 
+                              reparam = TRUE, 
+                              meas_error = TRUE))},
+             evaluator = tweak(cluster, workers = clust3))
+
+```
+
+
+
+```{r}
+
+futureAssign("evals3_master", value = {
+      test_bd <- purrr::map(testcases, ~swot_bamdata(.))
+      test_be <- purrr::map(test_bd, 
+                            ~bamr::bam_estimate(., 
+                              variant = "manning", 
+                              # reparam = TRUE, 
+                              meas_error = FALSE))}, 
+             evaluator = tweak(cluster, workers = clust1))
+futureAssign("evals3_devel", 
+   value = {
+      test_bd <- purrr::map(testcases, ~swot_bamdata(.))
+      test_be <- purrr::map(test_bd, 
+                            ~bamr::bam_estimate(., 
+                              variant = "manning", 
+                              # reparam = TRUE, 
+                              meas_error = FALSE))},
+             evaluator = tweak(cluster, workers = clust2))
+futureAssign("evals3_consolidate",  
+   value = {
+      test_bd <- purrr::map(testcases, ~swot_bamdata(.))
+      test_be <- purrr::map(test_bd, 
+                            ~bamr::bam_estimate(., 
+                              variant = "manning", 
+                              reparam = TRUE, 
+                              meas_error = FALSE))},
+             evaluator = tweak(cluster, workers = clust3))
+```
+
+
+devel not working. Check a single case. OK, so rerunning the cluster definition fixed it. 
+
+Now compare the evals. 
+
+```{r}
+evals1_master$Cumberland %>% 
+  bam_hydrograph()
+evals1_devel$Cumberland %>% 
+  bam_hydrograph()
+evals1_consolidate$Cumberland %>% 
+  bam_hydrograph()
+
+evals1_master$Ganges %>% 
+  bam_hydrograph()
+evals1_devel$Ganges %>% 
+  bam_hydrograph()
+evals1_consolidate$Ganges %>% 
+  bam_hydrograph()
+
+
+evals1_master$SacramentoUpstream %>% 
+  bam_hydrograph()
+evals1_devel$SacramentoUpstream %>% 
+  bam_hydrograph()
+evals1_consolidate$SacramentoUpstream %>% 
+  bam_hydrograph()
+
+
+```
+
+
+```{r}
+evals2_master$Cumberland %>% 
+  bam_hydrograph()
+evals2_devel$Cumberland %>% 
+  bam_hydrograph()
+evals2_consolidate$Cumberland %>% 
+  bam_hydrograph()
+
+evals2_master$Ganges %>% 
+  bam_hydrograph()
+evals2_devel$Ganges %>% 
+  bam_hydrograph()
+evals2_consolidate$Ganges %>% 
+  bam_hydrograph()
+
+evals2_master$SacramentoUpstream %>% 
+  bam_hydrograph()
+evals2_devel$SacramentoUpstream %>% 
+  bam_hydrograph()
+evals2_consolidate$SacramentoUpstream %>% 
+  bam_hydrograph()
+
+```
+
+
+Jeez, that took forever! But now I have the answers I need. Make sure I can cache the objects in this notebook. 
