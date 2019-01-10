@@ -1,0 +1,144 @@
+---
+title: "notebook20181212"
+author: "Mark Hagemann"
+date: "December 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Continuing with new A0-only likliehood. Current TODO:
+
+- get MLE for A0 on Pepsi 1 cases
+- calculate observed information matrix for new likelihood on Pepsi 1
+- Show eigenvalues, first and last eigenvectors
+- Connect to accuracy of MLE A0 estimate.
+- Document math in reports/ rmarkdown document
+
+### MLE for A0 on Pepsi 1 cases
+
+Try a single case.
+
+```{r}
+case1 <- sscase
+case1_ll <- case1 %>% 
+  swot_bamdata(Qhat = 100) %>% 
+  A0_llfun_vector(negative = TRUE, gradient = TRUE)
+
+case1_A0hat <- case1 %>% 
+  swot_bamdata(Qhat = 100) %>% 
+  bamr::bam_priors() %>% 
+  `[[`("logA0_hat") %>% 
+  exp()
+
+
+case1_inits <- c(case1_A0hat, 0.15)
+
+case1_ll(case1_inits)
+
+case1_mle <- nlm(f = case1_ll, p = c(case1_A0hat, 0.15), iterlim = 1000, hessian = TRUE)
+
+case1_mle
+```
+
+Doesn't work so well! Inspect the Hessian.
+
+```{r}
+case1_hess <- hessian(case1_ll, case1_mle$estimate)
+
+eigs1 <- eigen(case1_mle$hessian)
+eigs1 <- eigen(case1_hess)
+eigs1$values
+
+ns <- length(eigs1$values) - 1
+
+plot(eigs1$vectors[, 1])
+plot(eigs1$vectors[, length(eigs1$values)])
+
+# Make a unit vector
+unitize <- function(x) {
+  lenx <- as.vector(sqrt(x %*% x))
+  x / lenx
+}
+
+unitize(c(rep(1, ns), 0)) %*% case1_hess %*% unitize(c(rep(1, ns), 0))
+```
+
+Can I now try for the whole pepsi 1 dataset?
+
+```{r}
+pepcases <- reachdata %>% 
+  map(swot_bamdata)
+
+pepnlls <- pepcases %>% 
+  map(A0_llfun_vector, negative = TRUE, gradient = TRUE)
+
+peppriors <- pepcases %>% 
+  map(bamr::bam_priors)
+
+pepinits <- peppriors %>% 
+  map(~.$logA0_hat) %>% 
+  map(~c(exp(.), 0.15))
+
+pepmles <- map2(.x = pepnlls, .y = pepinits, 
+                .f = possibly(~nlm(f = .x, p = .y, hessian = TRUE, iterlim = 1000),
+                              otherwise = NA))
+
+pepcodes <- map_int(pepmles, ~.$code)
+pepcodes
+pepests <- map(pepmles, ~.$estimate)
+pephess <- map(pepmles, ~.$hessian)
+
+pepeigs <- map(pephess, eigen)
+```
+
+Compare to truth
+
+```{r}
+getTruth <- function(swotlist) {
+  trueA0 <- apply(swotlist$A, 1, median)
+  truesigma <- mcman_sigma(swotlist)
+  out <- c(trueA0, truesigma)
+  out
+}
+
+getTruth(reachdata$Connecticut)  
+peptruth <- map(reachdata, getTruth)
+pepests$Connecticut
+pepeigs$Connecticut$values
+
+mineigs <- map_dbl(pepeigs, ~min(.$values))
+mineigs %>% sort(decreasing = TRUE)
+
+plot(pepeigs$Connecticut$vectors[, 4])
+
+```
+
+```{r}
+compplot <- function(case, sigma = FALSE) {
+  truth <- getTruth(reachdata[[case]])
+  est <- pepests[[case]]
+  if (!sigma) {
+    truth <- truth[-length(truth)]
+    est <- est[-length(est)]
+  }
+  plot(truth, est); abline(0, 1)
+}
+compplot("SacramentoDownstream")
+```
+
+How well is sigma estimated?
+
+```{r}
+peptruth_sig <- peptruth %>% 
+  map_dbl(~.[length(.)])
+
+pepests_sig <- pepests %>% 
+  map_dbl(~.[length(.)])
+
+plot(peptruth_sig, pepests_sig, log = "xy"); abline(0, 1)
+sort(peptruth_sig, decreasing = TRUE)
+```
+

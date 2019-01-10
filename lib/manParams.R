@@ -3,25 +3,34 @@
 #' 
 #' Modified from airSWOT project. 
 #' 
-#' @param datalist A netcdf-derived list obtained from swotData::nc_list()
+#' @param swotlist A list of SWOT observables
 #' 
-calcManParams <- function(datalist) {
-
-  S <- datalist$S
-  W <- datalist$W
-  A <- datalist$A
-  Q <- datalist$Q
+calcManParams <- function(swotlist, A0ref = c("minimum", "median")) {
+  
+  A0ref <- match.arg(A0ref)
+  
+  S <- swotlist$S
+  W <- swotlist$W
+  A <- swotlist$A
+  Q <- swotlist$Q
   
   N <- 1 / Q * W^(-2/3) * A^(5/3) * S^(1/2)
-  n <- median(N, na.rm = TRUE)
+  n <- geomMean(N, na.rm = TRUE)
   
-  A0 <- apply(A, 1, min, na.rm = TRUE)
+  sigma <- sd(log(N) - log(n), na.rm = TRUE)
   
+  if (A0ref == "minimum") {
+    A0 <- apply(A, 1, min, na.rm = TRUE)
+  } else if (A0ref == "median") {
+    A0 <- apply(A, 1, median, na.rm = TRUE)
+  }
+
   qvec <- apply(Q, 2, median)
   logQbar <- mean(log(Q))
   logQdot <- apply(log(Q), 2, mean) - logQbar
   
-  out <- list(n = n, A0 = A0, logQbar = logQbar, logQdot = logQdot, Q = qvec)
+  out <- list(n = n, A0 = A0, logQbar = logQbar, logQdot = logQdot, Q = qvec, 
+              sigma = sigma)
   out
 }
 
