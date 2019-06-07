@@ -1,0 +1,370 @@
+---
+title: "notebook20180830"
+author: "Mark Hagemann"
+date: "August 30, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Working on getting stan to play nice with ragged swot data. Herein I shall test the changes. 
+
+```{r}
+library(rstan)
+library(bamr)
+library(swotr)
+library(dplyr)
+load("../cache/reachdata.RData")
+
+mod1 <- stan_model("../../bamr/exec/master.stan")
+
+testdat1 <- swot_bamdata(reachdata$Ganges)
+testinps1 <- bamr:::compose_bam_inputs(testdat1) %>% 
+  within(., {
+    ntot_man <- ntot_amhg <- nx * nt
+    hasdat_man <- hasdat_amhg <- matrix(1, nr = nx, nc = nt)
+    inc_m <- 0
+    inc_a <- 1
+    meas_err <- 0
+  })
+
+opts1 <- optimizing(mod1, data = testinps1, as_vector = FALSE)
+samps1 <- sampling(mod1, data = testinps1, chains = 1, 
+                   pars = c("Wact", "Sact", "dApos_act", "man_lhs", "man_rhs",
+                            "amhg_rhs", "logA_man", "logQ_man", "logQ_amhg"),
+                   include = FALSE)
+
+samps2 <- sampling(bamr:::stanmodels$master, data = testinps1, chains = 1, 
+                   pars = c("Wact", "Sact", "dApos_act", "man_lhs", "man_rhs",
+                            "amhg_rhs", "logA_man", "logQ_man", "logQ_amhg"),
+                   include = FALSE)
+
+```
+
+From a first-pass, ~~the new version takes a little over 2x as long as the old.~~ Nope, it's the same! 
+
+How do the results compare?
+
+```{r}
+bam_hydrograph(samps1)
+bam_hydrograph(samps2)
+
+stan_trace(samps1, pars = "A0", inc_warmup = TRUE)
+stan_trace(samps1, pars = "logQ[1]", inc_warmup = TRUE)
+
+stan_trace(samps2, pars = "A0", inc_warmup = TRUE)
+stan_trace(samps2, pars = "logQ[1]", inc_warmup = TRUE)
+
+```
+
+Test out the ragged_vec and rep functions
+
+```{stan output.var = "raggedtest"}
+
+functions {
+  // Convert an array to a vector based on a binary matrix 
+  // indicating non-missing data
+  
+ vector ragged_vec(vector[] x, int[,] bin) {
+    vector[num_elements(x)] out;
+    int ind;
+    
+    ind = 1;
+    for (i in 1:size(x)) {
+      for (t in 1:num_elements(x[1])) {
+        // print(bin[i, t]);
+        // print(ind);
+        if (bin[i, t] == 1) {
+          out[ind] = x[i, t];
+          ind += 1;
+        }
+      }
+    }
+    // print(out);
+    return(out[1:(ind - 1)]);
+  }
+}
+
+data {
+  int nx;
+  int nt;
+  int ntot;
+  int isobs[nx, nt];
+  vector[nt] xmat[nx];
+}
+
+transformed data {
+  vector[ntot] xvec;
+  
+  xvec = ragged_vec(xmat, isobs);
+  print(xvec);
+}
+
+parameters {
+  real mu; 
+}
+
+model {
+  xvec ~ normal(mu, 1);
+  mu ~ normal(0, 1);
+}
+
+```
+
+```{r}
+
+nx <- 3
+nt <- 4
+ntot <- 10
+isobs <- matrix(sample(c(rep(1, ntot), rep(0, nx * nt - ntot))),
+                nr = nx, nc = nt)
+xmat <- matrix(rnorm(nx * nt), nc = nt, nr = nx)
+
+raginps <- list(
+  nx = nx, 
+  nt = nt, 
+  ntot = ntot,
+  xmat = xmat,
+  isobs = isobs
+)
+
+ragopt <- optimizing(raggedtest, data = raginps)
+ragsamp <- sampling(raggedtest, data = raginps, chains = 1)
+```
+
+
+
+```{stan output.var = "reptest"}
+
+functions {
+  // repeat each element of a vector a given number of times
+  vector rep(vector x, int[] each) {
+    vector[sum(each)] out;
+    int startind;
+    int endind;
+    
+    endind = 0;
+    startind = 1;
+    for (i in 1:size(each)) {
+      endind = endind + each[i];
+      out[startind:endind] = rep_vector(x[i], each[i]);
+      startind = endind + 1;
+    }
+    
+    return(out);
+  }
+  
+  // Number of reps
+  int[] nreps(int[,] bin, int margin) {
+    int nt;
+    int nx;
+    int nn;
+    int out[max(size(bin), num_elements(bin[1]))];
+    
+    nx = size(bin);
+    nt = num_elements(bin[1]);
+    nn = margin == 1 ? nx : nt;
+
+    // initialize vector to zero
+    for (ind in 1:nn) {
+      out[ind] = 0;
+    }
+
+    for (i in 1:nx) {
+      for (t in 1:nt) {
+        if (margin == 1)
+          out[i] = out[i] + bin[i, t];
+        else
+          out[t] = out[t] + bin[i, t];
+      }
+    }
+    return(out[1:nn]);
+  }
+}
+
+data {
+  int nx;
+  int nt;
+  int ntot;
+  int isobs[nx, nt];
+  vector[nx] xvec1;
+  vector[nt] xvec2;
+}
+
+transformed data {
+  int times1[nx];
+  int times2[nt];
+  vector[ntot] longvec1;
+  vector[ntot] longvec2;
+  
+  times1 = nreps(isobs, 1);
+  times2 = nreps(isobs, 2);
+  
+  longvec1 = rep(xvec1, times1);
+  longvec2 = rep(xvec2, times2);
+  
+  print(times1);
+  print(times2);
+  print(longvec1);
+  print(longvec2);
+  print(num_elements(longvec1));
+  print(num_elements(longvec2));
+}
+
+parameters {
+  real mu;
+}
+
+model {
+  mu ~ normal(0, 1);
+}
+```
+
+
+```{r}
+nx <- 3
+nt <- 4
+ntot <- 10
+isobs <- matrix(sample(c(rep(1, ntot), rep(0, nx * nt - ntot))),
+                nr = nx, nc = nt)
+xmat <- matrix(rnorm(nx * nt), nc = nt, nr = nx)
+
+repinps <- list(
+  nx = nx, 
+  nt = nt, 
+  ntot = ntot,
+  xvec1 <- rnorm(nx),
+  xvec2 <- rnorm(nt),
+  isobs = isobs
+)
+
+repopt <- optimizing(reptest, data = repinps)
+
+```
+
+That appears to work! Now go back and retest the new implementation. 
+
+Making progress. I scrapped the above functions when I realized I had to be more deliberate about vectorizing arrays and repeating vectors--rows first! then columns. Anyway, I now need to test a new function that is needed for defining Wact_man using Wact and the integer arrays giving non-missing Manning and AMHG indices. 
+
+```{stan output.var = "indtest"}
+
+functions {
+  vector ragged_vec(vector[] x, int[,] bin) {
+    vector[num_elements(x)] out;
+    int ind;
+    
+    ind = 1;
+    for (i in 1:size(x)) {
+      for (t in 1:num_elements(x[1])) {
+        // print(bin[i, t]);
+        // print(ind);
+        if (bin[i, t] == 1) {
+          out[ind] = x[i, t];
+          ind += 1;
+        }
+      }
+    }
+    // print(out);
+    return(out[1:(ind - 1)]);
+  }
+
+  // indices of vectorized bin1 that are also in vectorized bin2
+  int[] commoninds(int[,] bin1, int[,] bin2) {
+    int out[num_elements(bin1)];
+    int vecinds[size(bin1), num_elements(bin1[1])];
+    int ctr;
+    int ind;
+
+    ctr = 0;
+    for (i in 1:size(bin1)) {
+      for (t in 1:num_elements(bin1[1])) {
+        if (bin1[i, t] == 1) {
+          ctr += 1;
+          vecinds[i, t] = ctr;
+        }
+      }
+    }
+
+    ind = 0;
+    for (i in 1:size(vecinds)) {
+      for (t in 1:size(vecinds[1])) {
+        if (bin2[i, t] == 1) {
+          ind += 1;
+          out[ind] = vecinds[i, t];
+        }
+      }
+    }
+    return(out[1:ind]);
+  }
+}
+
+data {
+  int nx;
+  int nt;
+  //  int ntot;
+  int isobs1[nx, nt];
+  int isobs2[nx, nt];
+  int nobs1;
+  int nobs2;
+  vector[nt] xmat[nx];
+}
+
+transformed data {
+  vector[nobs1] xvec1;
+  int inds12[nobs2];
+  
+  xvec1 = ragged_vec(xmat, isobs1);
+  inds12 = commoninds(isobs1, isobs2);
+  
+  print(xvec1);
+  print(inds12);
+  print(xvec1[inds12]);
+}
+
+parameters {
+  real mu;
+}
+
+model {
+  mu ~ normal(0, 1);
+}
+
+```
+
+
+
+```{r}
+  int nx;
+  int nt;
+  int isobs1[nx, nt];
+  int isobs2[nx, nt];
+  int nobs1;
+  int nobs2;
+  vector[nt] xmat[nx];
+
+nx <- 3
+nt <- 4
+isobs1 <- matrix(c(1, 1, 0, 0, 
+                   1, 0, 1, 1, 
+                   1, 1, 0, 1), byrow = TRUE, nrow = 3)
+isobs2 <- isobs1
+isobs2[2, 1] <- isobs2[2, 4] <- isobs2[3, 2] <- 0
+xmat <- matrix(rnorm(12), nr = 3, nc = 4)
+
+indinps <- list(
+  nx = nx, 
+  nt = nt, 
+  isobs1 = isobs1, 
+  isobs2 = isobs2, 
+  nobs1 = sum(isobs1),
+  nobs2 = sum(isobs2),
+  xmat = xmat
+)
+
+indopts <- optimizing(indtest, data = indinps)
+```
+
+OK!
+

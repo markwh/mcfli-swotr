@@ -14,3 +14,5 @@ lisflood/*
 data
 *.RData
 *cache
+logos/*/ignore/
+!logos/*/*.png

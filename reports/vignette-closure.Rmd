@@ -144,7 +144,7 @@ gg1 <- anova1df %>%
   theme_minimal() +
   guides(fill = guide_legend(title = element_blank(), reverse = TRUE)) +
   theme(legend.position = "bottom")
-
+gg1
 ggsave("../graphs/poster/clos_anova.png", width = 4, height = 4, dpi = 500)
 
 ```

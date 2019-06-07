@@ -1,0 +1,101 @@
+---
+title: "notebook20190607"
+author: "Mark Hagemann"
+date: "6/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Trying to get the new stan file for bathymetry going. I need to test a funciton to do spatial averaging. 
+
+
+```{stan output.var='testfun'}
+functions {
+  vector ragged_vec(vector[] x, int[,] bin) {
+    vector[num_elements(x)] out;
+    int ind;
+    
+    ind = 1;
+    for (i in 1:size(x)) {
+      for (t in 1:num_elements(x[1])) {
+        if (bin[i, t] == 1) {
+          out[ind] = x[i, t];
+          ind += 1;
+        }
+      }
+    }
+    // print(out);
+    return(out[1:(ind - 1)]);
+  }
+
+  vector ragged_mean(vector x, int[,] bin) {
+    //TODO: TEST THIS FUNCTION
+
+    vector[num_elements(bin)] out;
+    
+    int startind;
+    int stopind; 
+    startind = 1;
+    for (i in 1:size(bin)) {
+      stopind = startind + sum(bin[i]) - 1; 
+      out[startind:stopind] = rep_vector(mean(x[startind:stopind]), sum(bin[i]));
+      startind = stopind + 1;
+    }
+    return(out[1:stopind]);
+  }
+}
+  
+
+data {
+  int ns;
+  int nt;
+  int ntot;
+  vector[nt] x[ns];
+  int<lower=0,upper=1> hasdat[ns, nt];
+}
+
+transformed data {
+  vector[ntot] xadj;
+  xadj = ragged_mean(ragged_vec(x, hasdat), hasdat);
+  //xadj = ragged_vec(x, hasdat);// - ragged_mean(ragged_vec(x, hasdat), hasdat);
+  print(xadj)
+}
+
+parameters {
+  real mu;
+}
+
+model {
+  xadj ~ normal(mu, 1);
+}
+
+```
+
+```{r}
+library(rstan)
+
+nt <- 4
+ns <- 3
+x <- matrix(rnorm(nt * ns, 2, 1), nrow = ns)
+hasdat <- matrix(1, nrow = ns, ncol = nt) 
+hasdat[x == min(x)] <- 0
+
+ntot <- sum(hasdat)
+
+datalist <- list(
+  ns = ns, nt = nt, ntot = ntot,
+  x = x, hasdat = hasdat
+)
+
+optimizing(testfun, data = datalist)
+
+```
+
+
+```{r}
+as.vector(t(x))
+```
+

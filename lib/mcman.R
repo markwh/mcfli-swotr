@@ -3,8 +3,8 @@
 # 3/27/2018
 # Migrated from other files, eventually to be packaged up.
 
-geomMean <- function(x) {
-  exp(mean(log(x)))
+geomMean <- function(x, na.rm = FALSE) {
+  exp(mean(log(x), na.rm = na.rm))
 }
 
 manning_ws35 <- function(swotlist, ndot = 1) {

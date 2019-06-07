@@ -8,7 +8,7 @@
 #' 
 #' @param nclist A netcdf-derived list obtained from swotData::nc_list()
 #' 
-calcManParams <- function(nclist) {
+calcManParams_nc <- function(nclist) {
   
   goods <- nclist$River_Info.gdrch
   S <- nclist$Reach_Timeseries.S[goods, ]
