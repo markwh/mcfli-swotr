@@ -1,0 +1,67 @@
+---
+title: "simplified bam"
+author: "Mark Hagemann"
+date: "5/6/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is a formal derivation of work I did in the 20181207 notebook. 
+
+We can simplify BAM considerably as follows:
+
+Let:
+
+- $q = \log Q$
+- $\dot{q} = q - \bar{q}$
+- $x = -2/3 \log W + 1/2 \log S$
+- $a = \log (A_0 + A')$
+- $\tilde{n} = \log n$ (Manning's n)
+
+Mass-conserved Manning's equation is then:
+
+$$
+q_t = -\tilde{n} + x_{st} + 5/3 a_{st}, s = 1, \dots, N_s
+$$
+
+Taking the spatial average gives:
+
+$$
+q_t = \bar{x}_{\cdot t} - \tilde{n} + \frac{5}{3} \bar{a}_{\cdot t} 
+$$
+
+Plugging this in to the first equation simplifies to: 
+
+$$
+x_{st} - \bar{x}_{\cdot t}  = - \frac{5}{3} (a_{st} - \bar{a}_{\cdot t}) 
+$$
+
+Next, assume that equation 1 only holds with an additional error term $\epsilon \sim N(0, \sigma)$. Assuming $\epsilon$ to be spatially independent makes error in equation 3 come have variance equal to $\sigma^2_* = \frac{N_s + 1}{N_s} \sigma^2$
+
+
+### AMHG
+
+The equivalent math for AMHG is
+
+$$
+w_{st} - w_c = b_s (q_t - q_c)
+$$
+
+Subtracting the spatial mean gives
+
+$$
+\bar{w}_{\cdot t} - w_c = \bar{b}(q_t - q_c)
+$$
+
+Substituting gives
+
+$$
+w_{st} - \bar{w}_{\cdot t} = (b_s - \bar{b})(q_t - q_c)
+$$
+
+Not helpful.
+
+So the simplified method only works for Manning, and only for bathymetry. Make a stan file. 
