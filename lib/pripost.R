@@ -41,7 +41,8 @@ pripost_n <- function(bampriors, stanfit, true_n = NULL) {
     dplyr::mutate(chains = gsub("^chain:", "", chains)) %>% 
     dplyr::filter(chains %in% chain) %>% 
     dplyr::mutate(value = ifelse(grepl("^log", parameters), exp(value), value),
-                  parameters = gsub("^log", "", parameters))
+                  parameters = gsub("^log", "", parameters), 
+                  parameters = gsub("\\[1\\]", "", parameters))
   
   # Make the data frame for plotting. Should include stan samples and values of prior density function
   
@@ -59,8 +60,12 @@ pripost_n <- function(bampriors, stanfit, true_n = NULL) {
     ggplot(aes(x = value)) + 
     stat_density(aes(y = ..scaled.., color = "darkblue"), geom = "line") + 
     geom_line(data = priordf, aes(x = priorx, y = priory, color = "magenta")) +
-    scale_color_manual(name = "", values = c("magenta" = "magenta", "darkblue" = "darkblue", "black" = "black"), 
-                       labels = c("magenta" = "prior", "darkblue" = "posterior", "black" = "truth")) +
+    scale_color_manual(name = "", values = c("magenta" = "magenta", 
+                                             "darkblue" = "darkblue", 
+                                             "black" = "black"), 
+                       labels = c("magenta" = "prior", 
+                                  "darkblue" = "posterior", 
+                                  "black" = "truth")) +
     # geom_histogram(aes(y = ..ncount..), position = "identity") +
     xlab("Manning's n") + 
     ylab("Scaled Probability") + theme_bw()
@@ -88,7 +93,7 @@ pripost_A0 <- function(bampriors, stanfit, true_A0 = NULL) {
     dplyr::filter(chains %in% chain) %>% 
     dplyr::mutate(value = ifelse(grepl("^log", parameters), exp(value), value),
                   parameters = gsub("^log", "", parameters)) %>% 
-    dplyr::mutate(index = gsub("^.+\\[", "", parameters), 
+    dplyr::mutate(index = gsub("^.+\\[1,", "", parameters), 
                   index = gsub("\\]$", "", index), 
                   index = as.numeric(index), 
                   parameters = gsub("\\[.+\\]$", "", parameters)) %>%
@@ -150,6 +155,8 @@ pripost_qdot <- function(bampriors, stanfit, true_Q = NULL, conf.level = 0.95) {
   
   posts <- rstan::extract(stanfit, pars = c("logQ", "logn"), permuted = FALSE) %>%
     reshape2::melt() %>%
+    dplyr::mutate(parameters = gsub("logn[1]", "logn", 
+                             parameters, fixed = TRUE)) %>% 
     spread(key = parameters, value = value) %>% 
     gather(key = index, value = logQ, -iterations, -chains, -logn) %>% 
     dplyr::mutate(index = gsub("^.+\\[", "", index), 
@@ -187,6 +194,8 @@ pripost_qbar <- function(bampriors, bamdata, stanfit, true_Q = NULL) {
   
   posts <- rstan::extract(stanfit, pars = c("logQ", "logn"), permuted = FALSE) %>%
     reshape2::melt() %>%
+    dplyr::mutate(parameters = gsub("logn[1]", "logn", 
+                                    parameters, fixed = TRUE)) %>% 
     spread(key = parameters, value = value) %>% 
     gather(key = index, value = logQ, -iterations, -chains, -logn) %>% 
     dplyr::mutate(index = gsub("^.+\\[", "", index), 
@@ -241,6 +250,8 @@ pripost_alpha <- function(bampriors, bamdata, stanfit, true_n = NULL, true_Q = N
   
   posts <- rstan::extract(stanfit, pars = c("logQ", "logn"), permuted = FALSE) %>%
     reshape2::melt() %>%
+    dplyr::mutate(parameters = gsub("logn[1]", "logn", 
+                                    parameters, fixed = TRUE)) %>% 
     spread(key = parameters, value = value) %>% 
     gather(key = index, value = logQ, -iterations, -chains, -logn) %>% 
     dplyr::mutate(index = gsub("^.+\\[", "", index), 
@@ -298,6 +309,8 @@ pripost_q <- function(bampriors, stanfit, true_Q = NULL, conf.level = 0.95) {
   
   posts <- rstan::extract(stanfit, pars = c("logQ", "logn"), permuted = FALSE) %>%
     reshape2::melt() %>%
+    dplyr::mutate(parameters = gsub("logn[1]", "logn", 
+                                    parameters, fixed = TRUE)) %>% 
     spread(key = parameters, value = value) %>% 
     gather(key = index, value = logQ, -iterations, -chains, -logn) %>% 
     dplyr::mutate(index = gsub("^.+\\[", "", index), 
