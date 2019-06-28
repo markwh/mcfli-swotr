@@ -4,7 +4,9 @@
 functions {
   // Conversion from array to vector takes place by row.
   // Nested elements are appended in sequence. 
-  
+  // That is, a N (rows) by M (columns) matrix X becomes 
+  // a vector [x11, x12, ..., x1M, x21, ..., xNM].
+
   
   // Convert an array to a vector based on a binary matrix 
   // indicating non-missing data
@@ -61,20 +63,24 @@ functions {
   }
   
   // Mean along a given index of an already-vectorized array. 
-  vector ragged_mean(vector x, int[,] bin, int index) {
-    TODO: TEST THIS FUNCTION
-
-    vector[num_elements(bin)] out;
+  vector ragged_mean(vector x, int[,] indarray, int[] numinds) {
     
-    int startind;
-    int stopind; 
-    startind = 1;
-    for (i in 1:size(bin)) {
-      stopind = startind + sum(bin[i]) - 1; 
-      out[startind:stopind] = rep_vector(mean(x[startind:stopind]), sum(bin[1]));
-      startind = stopind + 1;
+    vector[num_elements(x)] meanvec;
+    real meant;
+    
+    // print(num_elements(numinds))
+
+    // initialize counters
+    for (t in 1:num_elements(numinds)) {
+      // print(indarray[t][1:numinds[t]])
+      meant = mean(x[indarray[t][1:numinds[t]]]);
+      for (s in 1:numinds[t]) {
+        meanvec[indarray[t][s]] = meant;
+      }
+      
     }
     
+    return(meanvec);
   }
   
   // indices of vectorized bin1 that are also in vectorized bin2
@@ -118,7 +124,9 @@ data {
   int<lower=0> ntot_man; // total number of non-missing Manning observations
 
   // Missing data
-  int<lower=0,upper=1> hasdat_man[nx, nt]; // matrix of 0 (missing), 1 (not missing)
+  int<lower=0,upper=1> hasdat[nx, nt]; // matrix of 0 (missing), 1 (not missing)
+  int<lower=0> indmat[nt, nx];
+  int<lower=1> nindvec[nt];
 
   // *Actual* data
   vector[nt] Wobs[nx]; // measured widths, including placeholders for missing
@@ -156,6 +164,7 @@ transformed data {
   vector[ntot_man] logWobs;
   vector[ntot_man] logSobs;
   vector[ntot_man] dApos_obs;
+  vector[nt] sigma_man_adj[nx]; // Adjusted Manning stdev, accounting for subtraction of mean
   vector[ntot_man] sigmavec_man;
 
   for (i in 1:nx) {
@@ -163,14 +172,22 @@ transformed data {
   }
   
   // convert pseudo-ragged arrays to vectors
-  Wobsvec = ragged_vec(Wobs, hasdat_man);
-  Sobs_vec = ragged_vec(Sobs, hasdat_man);
-  dApos_obs = ragged_vec(dApos_array, hasdat_man);
+  Wobsvec = ragged_vec(Wobs, hasdat);
+  Sobs_vec = ragged_vec(Sobs, hasdat);
+  dApos_obs = ragged_vec(dApos_array, hasdat);
   
   logWobs = log(Wobsvec);
   logSobs = log(Sobs_vec);
   
-  sigmavec_man = ragged_vec(sigma_man, hasdat_man);
+  // Adjust standard deviation to account for averaging operation. 
+  for (i in 1:nx) {
+    for (j in 1:nt) {
+      sigma_man_adj[i][j] = sigma_man[i,j] * (nindvec[j] + 1.0) / (nindvec[j]);
+    }
+  }
+  
+  sigmavec_man = ragged_vec(sigma_man_adj, hasdat);
+  // print(sigmavec_man)
 }
 
 parameters {
@@ -184,36 +201,36 @@ parameters {
 
 transformed parameters {
 
-  vector[ntot_man] logA_man; // log area for Manning's equation
+  vector[ntot_man] logA; // log area for Manning's equation
+  vector[ntot_man] logA_ctr;
   vector[ntot_man] man_lhs; // centered slope-width transformed
-  vector[ntot_man] man_lhs_mean; // Mean across space of man_lhs
+  vector[ntot_man] man_lhs_ctr; // Mean across space of man_lhs
+  
 
   // Manning params
   if (meas_err) {
-    logA_man[1] = log(ragged_col(A0[1], hasdat_man) + dApos_act[1]);
-    man_lhs[1] = 4. * log(Wact[1]) - 3. * log(Sact[1]);
-    man_lhs[1] = 
+    logA = 10. * log(ragged_col(A0, hasdat) + dApos_act[1]);
+    man_lhs = 4. * log(Wact[1]) - 3. * log(Sact[1]);
   }
   else {
-    logA_man[1] = log(ragged_col(A0[1], hasdat_man) + dApos_obs);
-    man_lhs[1] = 4. * logWobs - 3. * logSobs;
+    logA = 10. * log(ragged_col(A0, hasdat) + dApos_obs);
+    man_lhs = 4. * logWobs - 3. * logSobs;
   }
   
+  logA_ctr = logA - ragged_mean(logA, indmat, nindvec);
+  man_lhs_ctr = man_lhs - ragged_mean(man_lhs, indmat, nindvec);
 }
 
 model {
-  x_shift ~ normal()
   
-  A0[1] + dA_shift[1] ~ lognormal(logA0_hat, logA0_sd);
-  logn[1] ~ normal(logn_hat, logn_sd);
+  // Prior on A0
+  A0 + dA_shift ~ lognormal(logA0_hat, logA0_sd);
 
   // Likelihood and observation error
     
   // Manning likelihood
-  if (inc_m) {
-    man_lhs[1] ~ normal(man_rhs[1], 6 * sigmavec_man);
-  }
-  
+  man_lhs_ctr ~ normal(logA_ctr, 6. * sigmavec_man);
+
   // Latent vars for measurement error
   if (meas_err) {
     Wact[1] ~ normal(Wobsvec, Werr_sd); // W meas err

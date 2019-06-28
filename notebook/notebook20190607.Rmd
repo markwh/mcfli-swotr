@@ -31,21 +31,27 @@ functions {
     return(out[1:(ind - 1)]);
   }
 
-  vector ragged_mean(vector x, int[,] bin) {
+  vector ragged_mean(vector x, int[,] indarray, int[] numinds) {
     //TODO: TEST THIS FUNCTION
 
-    vector[num_elements(bin)] out;
+    vector[num_elements(x)] meanvec;
+    real meant;
     
-    int startind;
-    int stopind; 
-    startind = 1;
-    for (i in 1:size(bin)) {
-      stopind = startind + sum(bin[i]) - 1; 
-      out[startind:stopind] = rep_vector(mean(x[startind:stopind]), sum(bin[i]));
-      startind = stopind + 1;
+    print(num_elements(numinds))
+
+    // initialize counters
+    for (t in 1:num_elements(numinds)) {
+      print(indarray[t][1:numinds[t]])
+      meant = mean(x[indarray[t][1:numinds[t]]]);
+      for (s in 1:numinds[t]) {
+        meanvec[indarray[t][s]] = meant;
+      }
+      
     }
-    return(out[1:stopind]);
+    
+    return(meanvec);
   }
+  
 }
   
 
@@ -55,12 +61,16 @@ data {
   int ntot;
   vector[nt] x[ns];
   int<lower=0,upper=1> hasdat[ns, nt];
+  int<lower=0> indmat[nt, ns];
+  int<lower=1> nindvec[nt];
 }
 
 transformed data {
   vector[ntot] xadj;
-  xadj = ragged_mean(ragged_vec(x, hasdat), hasdat);
-  //xadj = ragged_vec(x, hasdat);// - ragged_mean(ragged_vec(x, hasdat), hasdat);
+  //xadj = ragged_mean(ragged_vec(x, hasdat), indmat, nindvec);
+  print(ragged_vec(x, hasdat))
+  print(ragged_mean(ragged_vec(x, hasdat), indmat, nindvec))
+  xadj = ragged_vec(x, hasdat) - ragged_mean(ragged_vec(x, hasdat), indmat, nindvec);
   print(xadj)
 }
 
@@ -80,14 +90,17 @@ library(rstan)
 nt <- 4
 ns <- 3
 x <- matrix(rnorm(nt * ns, 2, 1), nrow = ns)
+x
 hasdat <- matrix(1, nrow = ns, ncol = nt) 
 hasdat[x == min(x)] <- 0
+hasdat
 
 ntot <- sum(hasdat)
 
 datalist <- list(
   ns = ns, nt = nt, ntot = ntot,
-  x = x, hasdat = hasdat
+  x = x, hasdat = hasdat,
+  indmat = get_indmat(hasdat), nindvec = get_nindvec(hasdat)
 )
 
 optimizing(testfun, data = datalist)
@@ -96,6 +109,99 @@ optimizing(testfun, data = datalist)
 
 
 ```{r}
-as.vector(t(x))
+xna <- x
+xna[!hasdat] <- NA
+scale(xna, scale = FALSE)
 ```
+
+I need a square matrix of indices the turn a hasdat-type matrix into a vector. 
+
+```{r}
+which(hasdat == 1)
+which(t(hasdat) == 1)
+
+indmat_t <- t(hasdat)
+indmat_t[t(hasdat == 1)] <- 1:sum(hasdat)
+indmat <- t(indmat_t)
+indmat
+
+# Push zeros last
+apply(indmat, 2, sort, decreasing = TRUE)
+
+# integer vector giving number of nonzero elements per column
+numindvec <- apply(hasdat, 2, sum)
+
+
+get_indmat <- function(bin) {
+  indmat_t <- t(bin)
+  indmat_t[t(bin == 1)] <- 1:sum(bin)
+  indmat <- t(indmat_t)
+  out <- apply(indmat, 2, sort, decreasing = TRUE)
+  t(out)
+}
+
+get_nindvec <- function(bin) apply(bin, 2, sum)
+
+```
+
+
+I may now be ready to give it a test. 
+
+Compile the model. 
+
+```{r}
+library(rstan)
+batmod <- stan_model("../stan/bat.stan")
+```
+
+
+```{r}
+testcase <- reachdata$Po %>% 
+  swot_sset(keeplocs = -14)
+testdat <- testcase %>% 
+  swot_bamdata() %>% 
+  bamr:::compose_bam_inputs()
+
+testdat <- within(testdat, {
+  hasdat = hasdat_man
+  indmat = get_indmat(hasdat_man)
+  nindvec = get_nindvec(hasdat_man)
+  meas_err = 0
+  # sigma_man = sigma_man / sigma_man * 0.01
+})
+
+samps1 <- sampling(object = batmod, data = testdat, cores = 4, chains = 4, pars = "A0")
+# pairs(samps1)
+summary(samps1)$summary
+optimizing(batmod, testdat)$par[1:3]
+```
+
+```{r}
+realA0(testcase, zero = "minimum")
+exp(testdat$logA0_hat)
+estA0(testcase, zero = "minimum")
+```
+
+
+```{r}
+testdat$dA_shift
+
+
+batman_linA(sscase)
+```
+
+See how well the theory holds in this case. 
+
+```{r}
+testcase %>% 
+  # swot_sset(keeplocs = -14) %>% 
+  manning_closure(log = TRUE) %>% 
+  plot_DAWG()
+
+xmat <- with(testcase, 4 * log(W) - 3 * log(S))
+a0mat <- 10 * log(testcase$A)
+plot(as.vector(scale(xmat, scale = FALSE)) - as.vector(scale(a0mat, scale = FALSE)))
+```
+
+
 

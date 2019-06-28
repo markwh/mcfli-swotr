@@ -1,0 +1,13 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+I have learned a few things today, in the course of getting travis to work with the bamr package. Here I'll document some important lessons. 
+
+- $PKG_TARBALL is not being created as a variable. Not sure why.
+- Appveyor has been running all along, but is failing. [See here.](https://ci.appveyor.com/project/markwh/bamr/history) TODO: get this running.
+- .travis.yml from rstantools skeleton (really from rstanarm) is very sloppily written and can be greatly improved
+- CXX14 is not supported in travis (at least not in trusty). Dirk Eddelbuettel has [a workaround](http://dirk.eddelbuettel.com/blog/2017/06/13/#007_c++14_r_travis), which I've successfully incorporated.
+- LTO on linux (`ld` command--maybe this is just linker, not LTO) defaults to ld.bfd, and needs to be explicitly told to use ld.gold, even when llvm gold library is installed. See [here](https://github.com/android-ndk/ndk/issues/242#issuecomment-262061997), [here](http://llvm.org/docs/GoldPlugin.html#lto-how-to-build) (last one linked from [here](https://github.com/numba/llvmlite/issues/54#issuecomment-294100389))
+
