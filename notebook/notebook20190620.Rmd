@@ -1,0 +1,475 @@
+---
+title: "notebook20190620"
+author: "Mark Hagemann"
+date: "6/20/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I've done some more math by hand. I think it's easiest now to make a likelihood function factory and plot some results.
+
+```{r}
+# Using known sigma (for now)
+llfunfac <- function(w, s, dA, sigma) {
+  x <- -2/3 * log(w) + 1/2 * log(s)
+  x <- x - swot_vec2mat(apply(x, 2, mean), x)
+  
+  out <- function(Abar, log = TRUE, plot = FALSE) {
+    # browser()
+    abarmat <- swot_vec2mat(Abar, x)
+    abarvec <- as.vector(abarmat)
+    amat1 <- log(abarmat + dA)
+    amat2 <- swot_vec2mat(apply(amat1, 2, mean, na.rm = TRUE), x)
+    mumat <- -5/3 * (amat1 - amat2)
+    muvec <- as.vector(mumat)
+    xvec <- as.vector(x)
+    navec <- is.na(muvec) | is.na(xvec)
+
+    if (plot) print(plot_DAWG(x - mumat))
+
+    out2 <- sum(dnorm(xvec[!navec], mean = muvec[!navec], sd = sigma, log = TRUE))
+    if (!log) out2 <- exp(out2)
+    out2
+  }
+  out
+}
+
+calc_sigma <- function(case, plot = FALSE) {
+  lhs <- with(case, -2/3 * log(W) + 1/2 * log(S))
+  lhs <- lhs - swot_vec2mat(apply(lhs, 2, mean), lhs)
+  rhs <- - 5/3 * log(case$A)
+  rhs <- rhs - swot_vec2mat(apply(rhs, 2, mean), rhs)
+  out <- sd(lhs - rhs)
+  
+  if (plot)
+    print(plot_DAWG(lhs - rhs))
+  
+  out
+}
+
+llfun1 <- llfunfac(sscase$W, sscase$S, sscase$dA, sigma = calc_sigma(sscase))
+
+avecs <- lapply(1:10000, function(x) runif(3, 50, 150))
+avecs <- expand.grid(a1 = seq(80, 130, by = 2),
+                     a2 = seq(80, 130, by = 2), 
+                     a3 = c(90, 100, 110)) %>% 
+  split(1:nrow(.)) %>% 
+  map(unlist)
+
+lls <- map_dbl(avecs, llfun1)
+
+lldf <- Reduce(rbind, avecs) %>% 
+  as.data.frame() %>% 
+  setNames(paste0("a", 1:ncol(.))) %>% 
+  mutate(ll = lls) %>% glimpse()
+
+
+llfun1(realA0(sscase), plot = TRUE)
+
+
+
+lldf %>% 
+  filter(a3 > 90, a3 < 110) %>% 
+  ggplot() +
+  geom_contour(aes(x = a1, y = a2, z = ll), stat = "contour", bins = 40)
+
+
+optim(avecs[[1]], function(par) -llfun1(par), 
+      lower = apply(sscase$dA, 1, function(x) -min(x) + 10))
+```
+
+Next: something harder.
+
+```{r}
+testcase <- reachdata$Po %>% 
+  swot_sset(keeplocs = 8:11)
+realsig <- calc_sigma(testcase, plot = TRUE)
+
+llfun2 <- with(testcase, llfunfac(W, S, dA, sigma = realsig))
+
+
+startpars <- apply(testcase$dA, 1, function(x) -min(x) + 100)
+
+maxlik <- optim(startpars, function(x) -llfun2(x), control = list(maxit = 5000), hessian = TRUE)
+maxlik$convergence
+
+calc_sigma(testcase, plot = TRUE)
+llfun2(realA0(testcase, zero = "median"), plot = TRUE)
+llfun2(maxlik$par, plot = TRUE)
+
+plot(realA0(testcase, zero = "median"), maxlik$par); abline(0, 1)
+
+```
+
+
+This is suggestive of some kind of (smart?) subsetting of locations before estimating A0. First I'd like to see whether sigma can actually be inferred.
+
+```{r}
+llfunfac2 <- function(w, s, dA) {
+  x <- -2/3 * log(w) + 1/2 * log(s)
+  x <- x - swot_vec2mat(apply(x, 2, mean), x)
+  
+  out <- function(pars, log = TRUE, plot = FALSE) {
+    # browser()
+    sigma <- pars[1]
+    Abar <- pars[-1]
+    abarmat <- swot_vec2mat(Abar, x)
+    abarvec <- as.vector(abarmat)
+    amat1 <- log(abarmat + dA)
+    amat2 <- swot_vec2mat(apply(amat1, 2, mean, na.rm = TRUE), x)
+    mumat <- -5/3 * (amat1 - amat2)
+    muvec <- as.vector(mumat)
+    xvec <- as.vector(x)
+    navec <- is.na(muvec) | is.na(xvec)
+
+    if (plot) print(plot_DAWG(x - mumat))
+
+    out2 <- sum(dnorm(xvec[!navec], mean = muvec[!navec], sd = sigma, log = TRUE))
+    if (!log) out2 <- exp(out2)
+    out2
+  }
+  out
+}
+
+llfun3 <- llfunfac2(sscase$W, sscase$S, sscase$dA)
+
+optim(c(0.2, avecs[[1]]), function(par) -llfun3(par))
+```
+
+It does very well! At least on sscase. 
+
+Let's now list what I would like to produce. 
+
+- *function factory* to produce likelihood function. Similarly for priors. 
+  - `a0_llfactory(case, priors = "auto")`
+- *optimization wrapper* to optimize function 
+  - `a0_optim(llfun, case)`
+  - Make sure this checks for convergence. 
+- *plotter* to show likelihood contours for 2 vars near optimum, others held at optimum
+  - `a0_contour(llfun, lloptim, pars = 1:2)`
+- *subsampler-repeater*
+  - This one requires some further thought. I want to see whether subsetting reaches and doing inference is beneficial. Ideally each would be a bayesian inference, from which I could accumulate a posterior from a random sampling of subsetts (size 3-5 each?) similar to random-forest approach. But it will be quicker to do using optimization. I can still use a prior, just modify the llik function. 
+  - Will likely require a *a0-adjuster*, which quickly calculates the full set of A0 using a subset. 
+    - Put everythin in terms of a single A0. 
+- *Bayesian Sampler*
+  - `a0_sample(llfun, lpfun_A0, lpfun_sigma)`, where lpfun_sigma should be conjugate (inverse gamma).
+
+
+### Function factory
+
+```{r}
+a0_priorfactory <- function(case) {
+  out <- function(pars) {
+    sigma <- pars[1]
+    sigpiece <- dgamma(sigma^(-2), shape = 2, rate = 0.05, log = TRUE)
+    
+    logA0 <- log(pars[-1])
+    a0mu <- bamr::estimate_logA0(case$W)
+    a0piece <- sum(dnorm(logA0, a0mu, 5, log = TRUE))
+    
+    out <- sigpiece + a0piece
+    out
+  }
+}
+
+a0_llfactory <- function(case, priorfun = a0_priorfactory(case)) {
+  
+  x <- -2/3 * log(case$W) + 1/2 * log(case$S)
+  x <- x - swot_vec2mat(apply(x, 2, mean), x)
+  
+  out <- function(pars) {
+    # browser()
+    sigma <- pars[1]
+    Abar <- pars[-1]
+    abarmat <- swot_vec2mat(Abar, x)
+    abarvec <- as.vector(abarmat)
+    amat1 <- log(abarmat + case$dA)
+    amat2 <- swot_vec2mat(apply(amat1, 2, mean, na.rm = TRUE), x)
+    mumat <- -5/3 * (amat1 - amat2)
+    muvec <- as.vector(mumat)
+    xvec <- as.vector(x)
+    navec <- is.na(muvec) | is.na(xvec)
+
+    out2 <- sum(dnorm(xvec[!navec], mean = muvec[!navec], sd = sigma, log = TRUE))
+    out2 <- out2 + priorfun(pars)
+    if (!is.finite(out2)) browser()
+    out2
+  }
+  out
+}
+```
+
+Need some gradient helpers. The gradient is as follows:
+
+$$
+\nabla \ell(\mathbf{\bar{A}}, \sigma) = \nabla \ell(\mathbf{\mu}, \sigma) \mathbf{J}_{\bar{A}, \mu} 
+$$
+
+where $J$ is the jacobian of $\bar{A}$ with respect to $\mu$. Note: $\bar{A}$ is a vector in space, whereas $\mu$ is a vector (or for convenience, a matrix) indexed in both time and space. In order to facilitate the Jacobian transformation, I will attempt to retain the matrix structure of $\mu$ and define the Jacobian matrix as a 3-dimensional array. This complicates the inclusion of $\sigma$ in the gradient, so *formally*, consider the gradient to be a vector, but *practically* consider it a concatenation of a scalar (for $\sigma$) and a matrix (for $\mu$). 
+
+```{r}
+
+#' derivative of normal density wrt vector mu, scalar sigma
+#' Returns a list of length 2 representing gradient of log-likelihood.
+#' Following my convenience convention, put sigma as first element of list, 
+#' second element of list is a matrix representing derivative wrt \mu_{st}
+llgrad_mu <- function(x, mean = 0, sd = 1, log = TRUE) {
+  # first in log-space
+  mu <- mean
+  sigma <- sd
+  dmu <-  sigma^(-2) * (x - mu)
+  dsigma <- sum(-1 / sigma + (x - mu)^2 * sigma^(-3))
+  
+  out <- list(dsigma, dmu)
+  out
+}
+
+# 3-D array for Jacobian (Abar only)
+
+a0_jacobfactory <- function(case) {
+  dA <- case$dA
+  nmat <- swot_vec2mat(apply(dA, 2, function(x) sum(!is.na(x))), dA)
+  ns <- nrow(dA)
+  nt <- ncol(dA)
+  outfun <- function(pars) {
+    Amat <- swot_vec2mat(pars[-1], dA) + dA
+    mat1 <- -5 / (3 * Amat)
+    mat2 <- -mat1 / nmat
+    outarray <- array(dim = c(ns, ns, nt))
+    
+    #Populate the array. First with mean component
+    outarray <- array(mat2, dim = c(ns, nt, ns))
+    
+    # Now put in contrast component
+    for (i in 1:ns) {
+      outarray[i, , i] <- outarray[i, , i] + mat1[i, ]
+    }
+    outarray
+  }
+  outfun
+}
+
+
+```
+
+
+
+
+```{r}
+a0_llgradfactory <- function(case, priorfun = a0_priorfactory(case)) {
+  x <- -2/3 * log(case$W) + 1/2 * log(case$S)
+  x <- x - swot_vec2mat(apply(x, 2, mean), x)
+  
+  jacobfun <- a0_jacobfactory(case)
+  
+  out <- function(pars) {
+    # browser()
+    sigma <- pars[1]
+    Abar <- pars[-1]
+    abarmat <- swot_vec2mat(Abar, x)
+    abarvec <- as.vector(abarmat)
+    amat1 <- log(abarmat + case$dA)
+    amat2 <- swot_vec2mat(apply(amat1, 2, mean, na.rm = TRUE), x)
+    mumat <- -5/3 * (amat1 - amat2)
+    # muvec <- as.vector(mumat)
+    # xvec <- as.vector(x)
+
+    # out2 <- sum(dnorm(xvec[!navec], mean = muvec[!navec], sd = sigma, log = TRUE))
+    
+    # gradient (list, see above) of likelihood wrt mu_i
+    gradlist <- llgrad_mu(x, mean = mumat, sd = sigma)
+    
+    # jacobian for mu -> Abar
+    jacobarray <- jacobfun(pars) # indexed space, time, space
+    jacobmat <- matrix(jacobarray, nrow = nrow(x), byrow = FALSE)
+
+    gradlist[[2]] <- jacobmat %*% as.vector(gradlist[[2]])
+    
+    unlist(gradlist)
+    }
+  out
+}
+
+a0_llgradfactory(sscase)(c(0.1, 100, 100, 100))
+
+```
+
+Test using nlm. Make a numerical deriv function.
+
+```{r}
+
+
+# testcase <- reachdata$Ganges
+testcase <- sscase
+testpars <- c(0.1, apply(testcase$dA, 1, function(x) -min(x, na.rm = TRUE) + 100))
+llfun <- a0_llfactory(testcase, priorfun = function(pars) 1)
+llgrad <- a0_llgradfactory(testcase, function(pars) 1)
+optimfun <- function(pars) {
+  out <- structure(-llfun(pars), gradient = -llgrad(pars))
+  out
+}
+testmins <- c(1e-6, -apply(testcase$dA, 1, min, na.rm = TRUE) + 2)
+
+llfun(testpars)
+numgrad <- numericDeriv(quote(llfun(testpars)), "testpars")
+llgrad(testpars) / attr(numgrad, "gradient")
+a0_jacobfactory(testcase)(testpars)
+optimfun(testpars)
+
+
+
+numericDeriv(quote(llfun(testpars)), "testpars")
+foo <- nlm(optimfun, testpars)
+foo <- nlminb(testpars, function(pars) -llfun(pars), 
+              gradient = function(pars) -llgrad(pars), lower = testmins)
+```
+
+
+
+### Optimization wrapper
+
+```{r}
+a0_optim <- function(case, llfun = a0_llfactory(case), 
+                     no_converge = c("warning", "error")) {
+  no_converge <- match.arg(no_converge)
+  
+  exceptfun <- if(no_converge == "warning") warning else stop
+  
+  a0mins <- apply(case$dA, 1, function(x) -min(x))
+  inits <- c(0.1, a0mins + 100)
+  res <- optim(inits, function(x) -llfun(x), control = list(maxit = 1500),
+               method = "L-BFGS-B", lower = c(1e-8, a0mins))
+  if (res$convergence != 0) exceptfun("Not converged.")
+  out <- res$par
+  out
+}
+
+a0_optim(testcase)
+
+a0_optim(sscase)
+bamr::estimate_logA0(sscase$W) %>% exp()
+a0_optim(sscase, llfun = a0_llfactory(sscase, priorfun = function(pars) 1))
+a0_optim(sscase, llfun = a0_llfactory(sscase, 
+    priorfun = function(pars) dgamma(1 / (pars[1]^2), x = startpars2, 0.05, log = TRUE)))
+a0_optim(sscase, llfun = llfun3)
+
+
+
+
+```
+
+It may be best to use a flat prior. 
+
+
+
+```{r}
+a0_contour <- function(case, llfun = a0_llfactory(case), 
+                       lloptim = a0_optim(case, llfun), 
+                       pars = 1:2, plot = TRUE, axis_factor = 1.5, 
+                       npoints = 50, ...) {
+  
+  xref <- lloptim[pars[1]]
+  xstart <- xref / axis_factor
+  xend <- xref * axis_factor
+  xvals <- seq(xstart, xend, length.out = npoints)
+  
+  yref <- lloptim[pars[2]]
+  ystart <- yref / axis_factor
+  yend <- yref * axis_factor
+  yvals <- seq(ystart, yend, length.out = npoints)
+  
+  xydf <- expand.grid(x = xvals, y = yvals)
+  
+  insertfun <- function(x, y) {
+    out <- lloptim
+    out[pars] <- c(x, y)
+    out
+  }
+  parslist <- map2(xydf$x, xydf$y, insertfun)
+  
+  llvals <- map_dbl(parslist, ~llfun(.))
+  
+  plotdf <- mutate(xydf, ll = llvals)
+  
+  if (!plot) return(plotdf)
+  
+  out <- ggplot(plotdf, aes(x = x, y = y, z = ll)) + 
+    geom_contour(...)
+  out
+}
+
+flatfun <- function(pars) 1
+a0_contour(sscase, llfun = a0_llfactory(sscase, priorfun = flatfun), bins = 20, pars = 2:3)
+  
+```
+
+Can I optimize the optimization? Profile the likelihood function call.
+
+```{r}
+ll_totest <- a0_llfactory(reachdata$Po)
+
+a0mins <- apply(reachdata$Po$dA, 1, function(x) -min(x))
+inits <- c(0.1, a0mins + 100)
+
+ll_totest(pars = inits)
+```
+
+Apparently it's too fast--don't worry about this yet.
+
+### subsampler-repeater
+
+```{r}
+a0_subcombs <- function(case, n_per = 3, max_reps = 100) {
+  nr <- nrow(case[[1]])
+  if (lchoose(nr, n_per) < log(max_reps)) {
+    # enumerate all combinations
+    combs <- combn(nr, n_per, simplify = FALSE)
+  } else {
+    combs <- lapply(1:max_reps, function(x) sample(1:nr, n_per))
+  }
+  
+  combs
+}
+
+a0_fullset <- function(case, index, a0) {
+  avec <- a0 + case$dA[index, ]
+  xmat1 <- (case$W^(-2/3) * case$S^(1/2))^(-3/5)
+  xmat2 <- xmat1 / swot_vec2mat(xmat1[index, ], xmat1)
+  out <- swot_vec2mat(avec, xmat1) * xmat2 - case$dA
+  out
+}
+
+a0_repeat <- function(case, n_per = 4, max_reps = 100) {
+  
+  prog <- progress::progress_bar$new()
+  
+  combs <- a0_subcombs(case, n_per, max_reps)
+  
+  mats <- list()
+  for (i in seq_along(combs)) {
+    prog$tick()
+    casei <- swot_sset(case, keeplocs = combs[[i]])
+    parsi <- a0_optim(casei, no_converge = "error")[-1]
+    
+    # if (length(combs[[i]] != length(parsi))) browser()
+    
+    matsi <- map2(combs[[i]], parsi, ~a0_fullset(case, index = .x, a0 = .y))
+    mats[[i]] <- matsi
+  }
+  
+  out <- unlist(mats, recursive = FALSE)
+  out
+}
+
+foo <- a0_repeat(reachdata$Po)
+
+```
+
+
+
+I now think I can do this analytically. Perhaps. ...or perhaps not. My "mu" parameter varies in both space and time, so no way to do it without using A' data. 
+
+

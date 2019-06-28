@@ -1,0 +1,83 @@
+---
+title: "notebook20190619"
+author: "Mark Hagemann"
+date: "6/19/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Having another go at simplified Manning via Gibbs.
+
+
+Set up data.
+
+```{r}
+testcase <- reachdata$Ganges
+testdata <- swot_bamdata(testcase)
+glimpse(testdata)
+
+x <- with(testdata, -2/3 * log(Wobs) + 1/2 * log(Sobs))
+dA <- rezero_dA(testdata$dAobs, "median")
+```
+
+Priors
+
+```{r}
+qnmean <- with(testdata, logQ_hat -3.5)
+qnsigma <- sqrt(0.5^2 + bamr::cv2sigma(1)^2)
+
+logAbar_mean <- bamr::estimate_logA0(testdata$Wobs)
+```
+
+Initialized parameters and transformed parameters
+
+```{r}
+Abar <- -apply(dA, 1, min) + 100
+# Abar <- realA0(testcase, zero = "median")
+rhs <- x + 5/3 * log(dA + swot_vec2mat(Abar, dA))
+
+amat <- Abar + dA
+plot_DAWG(amat * exp(x)^(3/5))
+
+estAbar <- function(s, A, x, dA) {
+  xsmat <- swot_vec2mat(x[s, ], x)
+  dAmat <- swot_vec2mat(dA[s, ], x)
+  out0 <- A * (x / xsmat)^(3/5) - dAmat
+  out0[-s, ]
+}
+
+estAbar(1, amat, exp(x), dA) %>% plot_DAWG()
+
+abarests <- map(1:nrow(amat), ~estAbar(., amat, exp(x), dA)) 
+
+
+plot_DAWG(abarests[[3]])
+```
+
+
+The following all happens within the iteration.
+
+First the parameters and adjusted parameters.
+
+Conditional posterior params
+
+```{r}
+
+qtnpostparams <- NormalNormalPosterior(apply(rhs, 2, mean), 
+                    datasigma = 0.15, 
+                    apply(rhs, 2, function(x) sum(!is.na(x))), 
+                    nu = qnmean, tau = qnsigma)
+
+
+abarmeans <- map_dbl(abarests, ~mean(log(.), na.rm = TRUE))
+abarns <- map_int(abarests, ~sum(!is.na(log(.))))
+abarpostparams <- NormalNormalPosterior(abarmeans, 0.15, abarns, nu = logAbar_mean,
+                                        tau = 0.5)
+
+```
+
+
+
